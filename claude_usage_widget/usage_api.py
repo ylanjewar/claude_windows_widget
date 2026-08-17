@@ -15,10 +15,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -32,10 +34,14 @@ REQUEST_TIMEOUT = 20
 class UsageError(Exception):
     """A fetch failed. `retryable` marks transient failures worth backing off on."""
 
-    def __init__(self, message: str, *, retryable: bool = True, status: int = 0):
+    def __init__(
+        self, message: str, *, retryable: bool = True, status: int = 0, body: str = ""
+    ):
         super().__init__(message)
         self.retryable = retryable
         self.status = status
+        # Raw response text, kept for the probe rather than shown in the widget.
+        self.body = body
 
 
 @dataclass
@@ -65,17 +71,49 @@ class UsageSnapshot:
 _cached_user_agent: str | None = None
 
 
-def _detect_cli_version() -> str | None:
-    exe = "claude.cmd" if os.name == "nt" else "claude"
+def _cli_candidates() -> list[str]:
+    """Places the Claude Code launcher turns up on Windows, PATH first."""
+    found: list[str] = []
+    for name in ("claude", "claude.cmd", "claude.exe", "claude.ps1"):
+        resolved = shutil.which(name)
+        if resolved and resolved not in found:
+            found.append(resolved)
+
+    home = Path.home()
+    extra = [
+        home / ".local" / "bin" / "claude.exe",
+        home / ".local" / "bin" / "claude",
+        home / ".claude" / "local" / "claude.exe",
+    ]
+    for var, tail in (
+        ("APPDATA", ("npm", "claude.cmd")),
+        ("LOCALAPPDATA", ("Programs", "claude", "claude.exe")),
+        ("ProgramFiles", ("Claude", "claude.exe")),
+    ):
+        base = os.environ.get(var)
+        if base:
+            extra.append(Path(base).joinpath(*tail))
+
+    for path in extra:
+        text = str(path)
+        if text not in found and path.exists():
+            found.append(text)
+    return found
+
+
+def _run_version(executable: str) -> str | None:
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    # .cmd and .ps1 launchers need a shell; a real executable does not.
+    use_shell = os.name == "nt" and executable.lower().endswith((".cmd", ".bat", ".ps1"))
+    command = f'"{executable}" --version' if use_shell else [executable, "--version"]
     try:
         proc = subprocess.run(
-            [exe, "--version"],
+            command,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=15,
             creationflags=flags,
-            shell=(os.name == "nt"),
+            shell=use_shell,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -83,12 +121,21 @@ def _detect_cli_version() -> str | None:
     return match.group(0) if match else None
 
 
+def detect_cli_version() -> str | None:
+    """Version of the installed Claude Code CLI, or None if it cannot be found."""
+    for candidate in _cli_candidates():
+        version = _run_version(candidate)
+        if version:
+            return version
+    return None
+
+
 def user_agent(override: str | None = None) -> str:
     global _cached_user_agent
     if override:
         return override
     if _cached_user_agent is None:
-        _cached_user_agent = f"claude-code/{_detect_cli_version() or FALLBACK_CLI_VERSION}"
+        _cached_user_agent = f"claude-code/{detect_cli_version() or FALLBACK_CLI_VERSION}"
     return _cached_user_agent
 
 
@@ -114,7 +161,7 @@ def fetch_usage(token: str, ua_override: str | None = None) -> dict[str, Any]:
     except urllib.error.HTTPError as exc:
         body = ""
         try:
-            body = exc.read().decode("utf-8", "replace")[:400]
+            body = exc.read().decode("utf-8", "replace")[:1000]
         except Exception:
             pass
         if exc.code in (401, 403):
@@ -122,10 +169,17 @@ def fetch_usage(token: str, ua_override: str | None = None) -> dict[str, Any]:
                 "Token rejected. Run `claude` and sign in again with /login.",
                 retryable=False,
                 status=exc.code,
+                body=body,
             ) from exc
         if exc.code == 429:
-            raise UsageError("Rate limited by the usage endpoint.", status=429) from exc
-        raise UsageError(f"HTTP {exc.code} from usage endpoint. {body}".strip(), status=exc.code) from exc
+            raise UsageError(
+                "Rate limited by the usage endpoint.", status=429, body=body
+            ) from exc
+        raise UsageError(
+            f"HTTP {exc.code} from usage endpoint. {body}".strip(),
+            status=exc.code,
+            body=body,
+        ) from exc
     except urllib.error.URLError as exc:
         raise UsageError(f"Network error: {exc.reason}") from exc
     except TimeoutError as exc:
