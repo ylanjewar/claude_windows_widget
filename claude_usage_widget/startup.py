@@ -43,6 +43,47 @@ def _launch_target() -> tuple[str, str, str]:
     return str(interpreter), "-m claude_usage_widget", str(project_root)
 
 
+def _icon_path() -> str:
+    """The generated app icon, if a build produced one."""
+    candidate = Path(__file__).resolve().parent.parent / "app.ico"
+    return str(candidate) if candidate.exists() else ""
+
+
+def _shortcut_script(link_expression: str) -> str:
+    """PowerShell that writes a shortcut, with `link_expression` naming the path.
+
+    Callers pass either a quoted literal path or an expression that resolves one,
+    which lets the Desktop location come from the shell rather than a guess —
+    OneDrive redirects it, so %USERPROFILE%\\Desktop is not reliable.
+    """
+    target, arguments, workdir = _launch_target()
+    lines = [
+        f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut({link_expression});",
+        f"$s.TargetPath = '{_ps_quote(target)}';",
+        f"$s.Arguments = '{_ps_quote(arguments)}';",
+        f"$s.WorkingDirectory = '{_ps_quote(workdir)}';",
+        "$s.WindowStyle = 7;",
+        "$s.Description = 'Claude usage widget';",
+    ]
+    icon = _icon_path()
+    if icon:
+        lines.append(f"$s.IconLocation = '{_ps_quote(icon)}';")
+    lines.append("$s.Save()")
+    return " ".join(lines)
+
+
+def create_desktop_shortcut() -> tuple[bool, str]:
+    """Put a no-console launcher on the Desktop."""
+    if os.name != "nt":
+        return False, "Desktop shortcuts are only supported on Windows."
+    script = (
+        "$d = [Environment]::GetFolderPath('Desktop'); "
+        + _shortcut_script(f"(Join-Path $d '{SHORTCUT_NAME}')")
+    )
+    ok, error = _run_powershell(script)
+    return (True, "") if ok else (False, error)
+
+
 def _run_powershell(script: str) -> tuple[bool, str]:
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     try:
@@ -71,27 +112,14 @@ def _run_powershell(script: str) -> tuple[bool, str]:
 def enable() -> tuple[bool, str]:
     if os.name != "nt":
         return False, "Autostart is only supported on Windows."
-    target, arguments, workdir = _launch_target()
     try:
         startup_dir().mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return False, f"Cannot create the Startup folder: {exc}"
 
-    script = (
-        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{link}'); "
-        "$s.TargetPath = '{target}'; "
-        "$s.Arguments = '{args}'; "
-        "$s.WorkingDirectory = '{workdir}'; "
-        "$s.WindowStyle = 7; "
-        "$s.Description = 'Claude usage widget'; "
-        "$s.Save()"
-    ).format(
-        link=_ps_quote(str(shortcut_path())),
-        target=_ps_quote(target),
-        args=_ps_quote(arguments),
-        workdir=_ps_quote(workdir),
+    ok, error = _run_powershell(
+        _shortcut_script(f"'{_ps_quote(str(shortcut_path()))}'")
     )
-    ok, error = _run_powershell(script)
     if not ok:
         return False, error
     return (True, "") if is_enabled() else (False, "Shortcut was not created.")

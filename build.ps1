@@ -27,19 +27,42 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
+# $ErrorActionPreference does not apply to native commands in Windows
+# PowerShell 5.1, so every external call needs its exit code checked by hand.
+# Without this a failing step scrolls past and the build fails later with a
+# misleading error.
+function Invoke-Step {
+    param([string]$Description, [scriptblock]$Command)
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description failed with exit code $LASTEXITCODE."
+    }
+}
+
 $venv = Join-Path $root ".venv"
 if (-not (Test-Path $venv)) {
     Write-Host "Creating virtual environment..." -ForegroundColor Cyan
-    & $Python -m venv $venv
+    Invoke-Step "Creating the virtual environment" { & $Python -m venv $venv }
 }
 
 $venvPython = Join-Path $venv "Scripts\python.exe"
-Write-Host "Installing dependencies..." -ForegroundColor Cyan
-& $venvPython -m pip install --upgrade pip --quiet
-& $venvPython -m pip install -r requirements.txt pyinstaller --quiet
+if (-not (Test-Path $venvPython)) { throw "No interpreter at $venvPython." }
 
+Write-Host "Installing dependencies..." -ForegroundColor Cyan
+Invoke-Step "Upgrading pip" { & $venvPython -m pip install --upgrade pip --quiet }
+Invoke-Step "Installing dependencies" {
+    & $venvPython -m pip install -r requirements.txt pyinstaller --quiet
+}
+
+# The icon is cosmetic, so a failure here downgrades to a warning rather than
+# stopping a build that would otherwise be perfectly good.
 Write-Host "Generating icon..." -ForegroundColor Cyan
-& $venvPython -m claude_usage_widget.icon "$root\app.ico"
+$iconPath = Join-Path $root "app.ico"
+& $venvPython -m claude_usage_widget.icon $iconPath
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $iconPath)) {
+    Write-Host "Could not generate app.ico; building without a custom icon." -ForegroundColor Yellow
+    $iconPath = $null
+}
 
 # Trimming Qt modules shrinks the bundle but can drop a DLL that a module we do
 # use depends on, producing an "ordinal could not be located" failure at launch.
@@ -61,13 +84,16 @@ if ($Trim) {
 }
 
 $packaging = if ($OneDir) { "--onedir" } else { "--onefile" }
+$pyiArgs = @(
+    "--noconfirm", "--clean", $packaging, "--noconsole",
+    "--name", "ClaudeUsageWidget"
+)
+if ($iconPath) { $pyiArgs += @("--icon", $iconPath) }
+$pyiArgs += $excludes
+$pyiArgs += (Join-Path $root "claude_usage_widget\__main__.py")
+
 Write-Host "Building executable ($packaging)..." -ForegroundColor Cyan
-& $venvPython -m PyInstaller `
-    --noconfirm --clean $packaging --noconsole `
-    --name "ClaudeUsageWidget" `
-    --icon "$root\app.ico" `
-    @excludes `
-    "$root\claude_usage_widget\__main__.py"
+Invoke-Step "PyInstaller" { & $venvPython -m PyInstaller @pyiArgs }
 
 $exe = if ($OneDir) {
     Join-Path $root "dist\ClaudeUsageWidget\ClaudeUsageWidget.exe"

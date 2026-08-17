@@ -256,6 +256,10 @@ class WidgetApp(QObject):
         autostart.toggled.connect(self._set_autostart)
         menu.addAction(autostart)
 
+        desktop = QAction("Create desktop shortcut", menu)
+        desktop.triggered.connect(self._create_desktop_shortcut)
+        menu.addAction(desktop)
+
         notify = QAction("Threshold notifications", menu)
         notify.setCheckable(True)
         notify.setChecked(bool(self.config.get("notifications_enabled")))
@@ -297,6 +301,20 @@ class WidgetApp(QObject):
         if not ok:
             self.tray.showMessage(
                 "Could not change autostart", error, QSystemTrayIcon.Warning, 8000
+            )
+
+    def _create_desktop_shortcut(self) -> None:
+        ok, error = startup.create_desktop_shortcut()
+        if ok:
+            self.tray.showMessage(
+                DISPLAY_NAME,
+                "Shortcut created on your Desktop. It launches without a console window.",
+                QSystemTrayIcon.Information,
+                6000,
+            )
+        else:
+            self.tray.showMessage(
+                "Could not create the shortcut", error, QSystemTrayIcon.Warning, 8000
             )
 
     def _set_opacity(self, value: float) -> None:

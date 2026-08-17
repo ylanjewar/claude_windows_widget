@@ -193,6 +193,37 @@ class WidgetAppTests(unittest.TestCase):
         self.assertIsNotNone(self.app.widget.state.snapshot)
         self.assertTrue(self.app.widget.state.status)
 
+    # -- icon -----------------------------------------------------------------
+
+    def test_write_ico_produces_a_valid_icon_file(self):
+        """The build passes this file to PyInstaller, so it must be real.
+
+        A silent failure here previously produced a build that died much later
+        with a confusing "icon input file not found".
+        """
+        import struct
+
+        from claude_usage_widget.icon import write_ico
+
+        path = os.path.join(tempfile.mkdtemp(prefix="claude-icon-"), "app.ico")
+        write_ico(path)
+
+        data = Path(path).read_bytes()
+        self.assertGreater(len(data), 500)
+        self.assertEqual(struct.unpack("<HHH", data[:6]), (0, 1, 1))
+        *_, bpp, length, offset = struct.unpack("<BBBBHHII", data[6:22])
+        self.assertEqual(bpp, 32)
+        self.assertEqual(data[offset : offset + 8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(offset + length, len(data), "declared length must match")
+
+    def test_tray_icon_renders_at_every_size(self):
+        from claude_usage_widget.icon import make_pixmap
+
+        for size in (16, 32, 256):
+            pixmap = make_pixmap(size)
+            self.assertFalse(pixmap.isNull())
+            self.assertEqual(pixmap.width(), size)
+
     def test_position_round_trips_through_config(self):
         from PySide6.QtCore import QPoint
 

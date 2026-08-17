@@ -10,7 +10,7 @@ from __future__ import annotations
 import struct
 import sys
 
-from PySide6.QtCore import QBuffer, QByteArray, QRectF, Qt
+from PySide6.QtCore import QBuffer, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 
 BACKDROP = QColor("#1F1F22")
@@ -54,11 +54,15 @@ def make_icon() -> QIcon:
 
 
 def write_ico(path: str, size: int = 256) -> None:
-    buffer = QBuffer(QByteArray())
+    # QBuffer() manages its own storage. Passing QBuffer(QByteArray()) hands it
+    # a temporary that Python frees immediately, and the next write segfaults.
+    buffer = QBuffer()
     buffer.open(QBuffer.WriteOnly)
     make_pixmap(size).save(buffer, "PNG")
     png = bytes(buffer.data())
     buffer.close()
+    if not png:
+        raise RuntimeError("Qt produced no PNG data for the icon.")
 
     # ICONDIR + one ICONDIRENTRY; width/height of 0 means 256.
     header = struct.pack("<HHH", 0, 1, 1)

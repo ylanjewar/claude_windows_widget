@@ -37,6 +37,20 @@ pip install -r requirements.txt
 python -m claude_usage_widget
 ```
 
+That last command holds the terminal open. To run it detached, with no console
+window at all, use the launcher instead — double-click `run.cmd`, or:
+
+```powershell
+.\run.cmd
+```
+
+`run.cmd` starts the widget with `pythonw.exe`, the console-less build of the
+same interpreter that ships with Python, and exits immediately. Close the
+terminal afterwards and the widget keeps running. Right-click the panel →
+**Create desktop shortcut** for a normal double-click launcher, or **Start with
+Windows** to have it come up at login. Both point at `pythonw.exe`, so no
+terminal is ever involved and there is nothing packaged for antivirus to flag.
+
 ## Build a standalone .exe
 
 ```powershell
@@ -68,6 +82,7 @@ far less often than the default onefile build.
 | Refresh now | Double-click the panel, or right-click → Refresh now |
 | Hide / show | Click the tray icon |
 | Autostart | Right-click → Start with Windows |
+| Desktop shortcut | Right-click → Create desktop shortcut |
 | Opacity | Right-click → Opacity |
 | Open full usage page | Click the `→` in the header |
 | Quit | Right-click → Quit |
