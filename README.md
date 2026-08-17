@@ -109,17 +109,32 @@ default is well clear of that, and on any failure the widget doubles its
 interval up to 30 minutes, keeps showing the last known values, and puts the
 reason in a footer line rather than going blank.
 
-**It is undocumented, so field names could change.** The parser is deliberately
-forgiving: it matches several spellings per row, normalises 0–1 fractions to
-percentages, and renders any unrecognised usage window with a generic label
-instead of dropping it. If the rows ever stop looking right:
+**It is undocumented, so field names could change.** The parser reads the
+response's `limits` array, which names each cap by `kind` and `scope` — that is
+where per-model weekly limits live, since the matching top-level keys
+(`seven_day_opus` and friends) are `null`. Credits come from `spend`, whose
+amounts are in **minor units**: `{"amount_minor": 1388, "exponent": 2}` is
+$13.88. The response also carries placeholder objects for unreleased features,
+all-null at 0%, which are filtered out rather than rendered as empty bars.
+
+If the `limits` array is ever absent, the parser falls back to top-level
+`five_hour` / `seven_day` keys, matching several spellings each and normalising
+0–1 fractions to percentages. The plan name is not in the response at all; it is
+derived from `rateLimitTier` in the credentials file, so
+`default_claude_max_5x` displays as "Max (5x)".
+
+If the rows ever stop looking right:
 
 ```powershell
 python -m claude_usage_widget.probe
 ```
 
-That prints the raw JSON and how the widget interpreted it, so remapping is a
-one-line edit to `WINDOW_SPECS` in `claude_usage_widget/usage_api.py`.
+That prints the credentials layout, token expiry, the exact request, and the raw
+JSON alongside how the widget interpreted it. Secrets are redacted — tokens show
+only their last six characters — so the output is safe to paste into an issue.
+Remapping is then a small edit to `LIMIT_KIND_LABELS` or `WINDOW_SPECS` in
+`claude_usage_widget/usage_api.py`. A captured response is checked in at
+`tests/fixtures/usage_response.json` and the parser is tested against it.
 
 ## Why not a real Windows 11 "widget"?
 

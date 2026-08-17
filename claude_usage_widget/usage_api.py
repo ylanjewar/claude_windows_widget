@@ -198,7 +198,17 @@ def fetch_usage(token: str, ua_override: str | None = None) -> dict[str, Any]:
 # Parsing
 # ---------------------------------------------------------------------------
 
-# Row order and labels follow Claude Code's /usage panel. Each entry lists the
+# The authoritative source is the "limits" array, which carries an explicit
+# kind and scope per row. These map kinds to the labels the /usage panel uses;
+# a scoped kind builds its label from scope.model.display_name instead.
+LIMIT_KIND_LABELS = {
+    "session": "5-hour limit",
+    "five_hour": "5-hour limit",
+    "weekly_all": "Weekly · all models",
+    "seven_day": "Weekly · all models",
+}
+
+# Fallback for responses without a "limits" array. Each entry lists the
 # response keys seen in the wild for that row; the first match wins.
 WINDOW_SPECS: list[tuple[str, str, tuple[str, ...]]] = [
     ("five_hour", "5-hour limit", ("five_hour", "fiveHour", "5_hour", "session", "current_session")),
@@ -257,6 +267,66 @@ def _extract_window(node: object) -> tuple[float, str | None] | None:
     return None
 
 
+def _scope_name(scope: object) -> str | None:
+    """Name a scoped limit, e.g. the model a weekly cap applies to."""
+    if not isinstance(scope, dict):
+        return None
+    model = scope.get("model")
+    if isinstance(model, dict):
+        for key in ("display_name", "displayName", "name", "id"):
+            value = model.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    for key in ("surface", "name", "display_name"):
+        value = scope.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _rows_from_limits(limits: object) -> list[UsageRow]:
+    """Build rows from the structured `limits` array."""
+    if not isinstance(limits, list):
+        return []
+    rows: list[UsageRow] = []
+    for item in limits:
+        if not isinstance(item, dict):
+            continue
+        value = item.get("percent")
+        if value is None:
+            value = item.get("utilization")
+        percent = _as_percent(value)
+        if percent is None:
+            continue
+
+        kind = str(item.get("kind") or item.get("group") or "limit")
+        scope_name = _scope_name(item.get("scope"))
+        label = LIMIT_KIND_LABELS.get(kind)
+        key = kind
+        if label is None:
+            if scope_name and kind.startswith("weekly"):
+                label = f"Weekly · {scope_name}"
+            elif scope_name:
+                label = f"{_prettify(kind)} · {scope_name}"
+            else:
+                label = _prettify(kind)
+        if scope_name:
+            # Keep notification bookkeeping stable when several scoped limits
+            # share a kind.
+            key = f"{kind}:{scope_name.lower()}"
+
+        resets = item.get("resets_at") or item.get("resetsAt")
+        rows.append(
+            UsageRow(
+                key=key,
+                label=label,
+                percent=percent,
+                resets_at=str(resets) if resets else None,
+            )
+        )
+    return rows
+
+
 def _find_plan(data: dict[str, Any]) -> str | None:
     for key in ("plan", "plan_name", "planName", "subscription", "subscription_type", "tier"):
         value = data.get(key)
@@ -291,6 +361,80 @@ def _money(value: object) -> float | None:
                 cents = _money(value[key])
                 return cents / 100 if cents is not None else None
     return None
+
+
+def _minor_amount(node: object) -> float | None:
+    """Decode {'amount_minor': 1388, 'exponent': 2} as 13.88.
+
+    Getting this wrong inflates the figure by 100x, so the exponent is only
+    defaulted when the key is genuinely absent.
+    """
+    if isinstance(node, dict) and "amount_minor" in node:
+        amount = node.get("amount_minor")
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+            return None
+        exponent = node.get("exponent")
+        if not isinstance(exponent, int) or isinstance(exponent, bool):
+            exponent = 2
+        return float(amount) / (10**exponent)
+    return _money(node)
+
+
+def _credits_from_spend(data: dict[str, Any]) -> UsageRow | None:
+    """The `spend` object, which is what the /usage panel's credits row shows."""
+    spend = data.get("spend")
+    if not isinstance(spend, dict) or spend.get("enabled") is False:
+        return None
+
+    used = _minor_amount(spend.get("used"))
+    limit = _minor_amount(spend.get("limit"))
+    if limit is None:
+        cap = spend.get("cap")
+        if isinstance(cap, dict):
+            limit = _minor_amount(cap.get("credits")) or _minor_amount(cap.get("money"))
+    if used is None or limit is None or limit <= 0:
+        return None
+
+    # Prefer the server's own percentage so the widget agrees with the panel.
+    percent = _as_percent(spend.get("percent"))
+    if percent is None:
+        percent = used / limit * 100
+    return UsageRow(
+        key="usage_credits",
+        label="Usage credits",
+        percent=min(percent, 100.0),
+        detail=f"${used:,.2f} of ${limit:,.2f}",
+    )
+
+
+def _credits_from_extra_usage(data: dict[str, Any]) -> UsageRow | None:
+    """Fallback: `extra_usage`, whose amounts are also in minor units."""
+    extra = data.get("extra_usage")
+    if not isinstance(extra, dict) or extra.get("is_enabled") is False:
+        return None
+    places = extra.get("decimal_places")
+    if not isinstance(places, int) or isinstance(places, bool):
+        places = 2
+    divisor = 10**places
+
+    used = extra.get("used_credits")
+    limit = extra.get("monthly_limit")
+    if not isinstance(used, (int, float)) or not isinstance(limit, (int, float)):
+        return None
+    if isinstance(used, bool) or isinstance(limit, bool) or limit <= 0:
+        return None
+
+    used_value = float(used) / divisor
+    limit_value = float(limit) / divisor
+    percent = _as_percent(extra.get("utilization"))
+    if percent is None:
+        percent = used_value / limit_value * 100
+    return UsageRow(
+        key="usage_credits",
+        label="Usage credits",
+        percent=min(percent, 100.0),
+        detail=f"${used_value:,.2f} of ${limit_value:,.2f}",
+    )
 
 
 def _extract_credits(data: dict[str, Any]) -> UsageRow | None:
@@ -341,59 +485,79 @@ def _prettify(key: str) -> str:
     return key.replace("_", " ").replace("-", " ").strip().capitalize()
 
 
+# Credits live in their own objects and must not be swept up as usage windows.
+NON_WINDOW_KEYS = frozenset({"spend", "extra_usage", "extraUsage", "usage_credits", "limits"})
+
+
 def parse_usage(data: dict[str, Any]) -> UsageSnapshot:
     snapshot = UsageSnapshot(raw=data)
     snapshot.plan = _find_plan(data)
 
-    # Some responses nest everything under a wrapper key.
-    scope: dict[str, Any] = data
-    for wrapper in ("usage", "limits", "rate_limits", "data"):
-        inner = data.get(wrapper)
-        if isinstance(inner, dict) and any(
-            _extract_window(v) for v in inner.values() if isinstance(v, (dict, int, float))
-        ):
-            scope = inner
-            break
+    # Preferred path: the structured array, which names each limit's kind and
+    # scope. Weekly per-model caps appear only here — the matching top-level
+    # keys (seven_day_opus and friends) are null.
+    snapshot.rows.extend(_rows_from_limits(data.get("limits")))
 
-    claimed: set[str] = set()
-    for key, label, aliases in WINDOW_SPECS:
-        for alias in aliases:
-            if alias not in scope:
+    if not snapshot.rows:
+        # Some responses nest everything under a wrapper key.
+        scope: dict[str, Any] = data
+        for wrapper in ("usage", "rate_limits", "data"):
+            inner = data.get(wrapper)
+            if isinstance(inner, dict) and any(
+                _extract_window(v)
+                for v in inner.values()
+                if isinstance(v, (dict, int, float))
+            ):
+                scope = inner
+                break
+
+        claimed: set[str] = set()
+        for key, label, aliases in WINDOW_SPECS:
+            for alias in aliases:
+                if alias not in scope:
+                    continue
+                window = _extract_window(scope[alias])
+                if window is None:
+                    continue
+                percent, resets = window
+                claimed.add(alias)
+                snapshot.rows.append(
+                    UsageRow(
+                        key=key,
+                        label=label,
+                        percent=percent,
+                        resets_at=str(resets) if resets is not None else None,
+                    )
+                )
+                break
+
+        # Anything else window-shaped still gets a bar, so a renamed field
+        # degrades to a slightly odd label instead of vanishing. Placeholder
+        # objects for unreleased features are all-null with 0% and no reset —
+        # those are noise, not limits.
+        for key, value in scope.items():
+            if key in claimed or key in NON_WINDOW_KEYS or not isinstance(value, dict):
                 continue
-            window = _extract_window(scope[alias])
+            window = _extract_window(value)
             if window is None:
                 continue
             percent, resets = window
-            claimed.add(alias)
+            if resets is None and percent == 0:
+                continue
             snapshot.rows.append(
                 UsageRow(
                     key=key,
-                    label=label,
+                    label=_prettify(key),
                     percent=percent,
                     resets_at=str(resets) if resets is not None else None,
                 )
             )
-            break
 
-    # Anything else window-shaped still gets a bar, so a renamed field degrades
-    # to a slightly odd label instead of vanishing.
-    for key, value in scope.items():
-        if key in claimed or not isinstance(value, dict):
-            continue
-        window = _extract_window(value)
-        if window is None:
-            continue
-        percent, resets = window
-        snapshot.rows.append(
-            UsageRow(
-                key=key,
-                label=_prettify(key),
-                percent=percent,
-                resets_at=str(resets) if resets is not None else None,
-            )
-        )
-
-    credits = _extract_credits(data) or _extract_credits(scope)
+    credits = (
+        _credits_from_spend(data)
+        or _credits_from_extra_usage(data)
+        or _extract_credits(data)
+    )
     if credits is not None:
         snapshot.rows.append(credits)
 
@@ -455,6 +619,10 @@ def format_reset(value: str | None, now: datetime | None = None) -> str:
 
 def load_snapshot(token: str, ua_override: str | None = None) -> UsageSnapshot:
     snapshot = parse_usage(fetch_usage(token, ua_override))
+    if not snapshot.plan:
+        from .credentials import plan_label
+
+        snapshot.plan = plan_label()
     for row in snapshot.rows:
         if not row.detail and row.resets_at:
             row.detail = format_reset(row.resets_at)

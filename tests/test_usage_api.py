@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from claude_usage_widget import credentials  # noqa: E402
 from claude_usage_widget.usage_api import (  # noqa: E402
     UsageError,
+    _prettify,
     format_reset,
     parse_timestamp,
     parse_usage,
@@ -35,6 +36,155 @@ TYPICAL = {
     "seven_day_opus": {"utilization": 24, "resets_at": iso(days=3)},
     "usage_credits": {"used": 13.88, "limit": 50.0},
 }
+
+
+FIXTURE = json.loads(
+    (Path(__file__).parent / "fixtures" / "usage_response.json").read_text("utf-8")
+)
+
+
+class RealResponseTests(unittest.TestCase):
+    """Against a captured live response — the shape that actually ships."""
+
+    def setUp(self):
+        self.rows = parse_usage(FIXTURE).rows
+
+    def test_rows_match_the_usage_panel(self):
+        self.assertEqual(
+            [row.label for row in self.rows],
+            ["5-hour limit", "Weekly · all models", "Weekly · Fable", "Usage credits"],
+        )
+
+    def test_percentages(self):
+        self.assertEqual([round(row.percent, 2) for row in self.rows], [11, 21, 26, 28])
+
+    def test_scoped_weekly_limit_comes_from_the_limits_array(self):
+        """seven_day_opus is null; the Fable cap only exists in `limits`."""
+        self.assertIsNone(FIXTURE["seven_day_opus"])
+        fable = self.rows[2]
+        self.assertEqual(fable.label, "Weekly · Fable")
+        self.assertEqual(fable.key, "weekly_scoped:fable")
+
+    def test_credits_are_minor_units(self):
+        """amount_minor 1388 with exponent 2 is $13.88, not $1,388."""
+        self.assertEqual(self.rows[3].detail, "$13.88 of $50.00")
+
+    def test_placeholder_objects_are_not_rendered(self):
+        """nimbus_quill is all-null at 0% — noise, not a limit."""
+        labels = [row.label for row in self.rows]
+        self.assertNotIn("Nimbus quill", labels)
+        for null_key in ("amber_ladder", "cinder_cove", "tangelo", "seven_day_sonnet"):
+            self.assertNotIn(_prettify(null_key), labels)
+
+    def test_reset_strings(self):
+        for row in self.rows[:3]:
+            self.assertTrue(format_reset(row.resets_at))
+
+    def test_credits_row_is_last(self):
+        self.assertEqual(self.rows[-1].key, "usage_credits")
+
+
+class LimitsArrayTests(unittest.TestCase):
+    def test_unknown_scoped_kind_still_labels_sensibly(self):
+        payload = {
+            "limits": [
+                {
+                    "kind": "weekly_scoped",
+                    "percent": 40,
+                    "resets_at": iso(days=1),
+                    "scope": {"model": {"display_name": "Sonnet"}},
+                }
+            ]
+        }
+        row = parse_usage(payload).rows[0]
+        self.assertEqual(row.label, "Weekly · Sonnet")
+        self.assertEqual(row.key, "weekly_scoped:sonnet")
+
+    def test_two_scoped_limits_get_distinct_keys(self):
+        """Distinct keys keep notification bookkeeping from colliding."""
+        payload = {
+            "limits": [
+                {
+                    "kind": "weekly_scoped",
+                    "percent": 40,
+                    "scope": {"model": {"display_name": "Fable"}},
+                },
+                {
+                    "kind": "weekly_scoped",
+                    "percent": 90,
+                    "scope": {"model": {"display_name": "Sonnet"}},
+                },
+            ]
+        }
+        keys = [row.key for row in parse_usage(payload).rows]
+        self.assertEqual(len(set(keys)), 2)
+
+    def test_unknown_unscoped_kind_is_prettified(self):
+        payload = {"limits": [{"kind": "monthly_all", "percent": 5}]}
+        self.assertEqual(parse_usage(payload).rows[0].label, "Monthly all")
+
+    def test_limits_array_wins_over_top_level_keys(self):
+        payload = {
+            "limits": [{"kind": "session", "percent": 44, "resets_at": iso(hours=1)}],
+            "five_hour": {"utilization": 99, "resets_at": iso(hours=1)},
+        }
+        rows = parse_usage(payload).rows
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(rows[0].percent, 44)
+
+    def test_falls_back_when_limits_is_empty(self):
+        payload = {"limits": [], "five_hour": {"utilization": 9, "resets_at": iso(hours=1)}}
+        rows = parse_usage(payload).rows
+        self.assertEqual(rows[0].label, "5-hour limit")
+        self.assertAlmostEqual(rows[0].percent, 9)
+
+
+class CreditsTests(unittest.TestCase):
+    def test_spend_is_preferred_over_extra_usage(self):
+        row = parse_usage(FIXTURE).rows[-1]
+        self.assertEqual(row.percent, 28)  # spend.percent, matching the panel
+
+    def test_extra_usage_fallback_also_scales_minor_units(self):
+        payload = {
+            "five_hour": {"utilization": 5, "resets_at": iso(hours=1)},
+            "extra_usage": {
+                "is_enabled": True,
+                "decimal_places": 2,
+                "used_credits": 1388.0,
+                "monthly_limit": 5000,
+                "utilization": 27.76,
+            },
+        }
+        row = parse_usage(payload).rows[-1]
+        self.assertEqual(row.detail, "$13.88 of $50.00")
+
+    def test_disabled_spend_is_skipped(self):
+        payload = dict(FIXTURE)
+        payload["spend"] = dict(FIXTURE["spend"], enabled=False)
+        payload["extra_usage"] = None
+        self.assertNotIn("Usage credits", [r.label for r in parse_usage(payload).rows])
+
+    def test_cap_is_used_when_limit_is_absent(self):
+        payload = {
+            "limits": [{"kind": "session", "percent": 1}],
+            "spend": {
+                "enabled": True,
+                "used": {"amount_minor": 250, "exponent": 2},
+                "cap": {"credits": {"amount_minor": 5000, "exponent": 2}},
+            },
+        }
+        self.assertEqual(parse_usage(payload).rows[-1].detail, "$2.50 of $50.00")
+
+    def test_zero_exponent_is_respected(self):
+        payload = {
+            "limits": [{"kind": "session", "percent": 1}],
+            "spend": {
+                "enabled": True,
+                "used": {"amount_minor": 7, "exponent": 0},
+                "limit": {"amount_minor": 50, "exponent": 0},
+            },
+        }
+        self.assertEqual(parse_usage(payload).rows[-1].detail, "$7.00 of $50.00")
 
 
 class ParseUsageTests(unittest.TestCase):

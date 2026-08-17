@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -86,6 +87,31 @@ def token_expiry_ms() -> int | None:
             number = int(value)
             # Some writers use seconds rather than milliseconds.
             return number if number > 10**12 else number * 1000
+    return None
+
+
+def plan_label() -> str | None:
+    """Human-readable plan name, e.g. "Max (5x)".
+
+    The usage response does not name the plan, but the credentials file records
+    the rate-limit tier it was issued for.
+    """
+    try:
+        data = json.loads(credentials_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+    tier = _find_key(data, "rateLimitTier")
+    if isinstance(tier, str) and tier.strip():
+        text = re.sub(r"^(default_)?claude_", "", tier.strip().lower())
+        multiplier = re.fullmatch(r"([a-z]+)_(\d+x)", text)
+        if multiplier:
+            return f"{multiplier.group(1).capitalize()} ({multiplier.group(2)})"
+        return text.replace("_", " ").title()
+
+    subscription = _find_key(data, "subscriptionType")
+    if isinstance(subscription, str) and subscription.strip():
+        return subscription.strip().capitalize()
     return None
 
 
