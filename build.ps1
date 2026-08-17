@@ -5,10 +5,20 @@
 .EXAMPLE
     .\build.ps1
     .\build.ps1 -Install      # also add it to the Startup folder
+    .\build.ps1 -OneDir       # unpacked folder build; less prone to AV flagging
+
+.NOTES
+    Antivirus software frequently flags PyInstaller onefile executables: the
+    bootloader unpacks and executes at runtime, which is also what malware
+    packers do. If Norton or Defender quarantines the build, -OneDir usually
+    avoids it. You can also skip packaging entirely and run from source with
+    `python -m claude_usage_widget`; the widget's own "Start with Windows"
+    option then registers pythonw.exe, which no antivirus objects to.
 #>
 [CmdletBinding()]
 param(
     [switch]$Install,
+    [switch]$OneDir,
     [string]$Python = "python"
 )
 
@@ -41,16 +51,28 @@ $excludes = @(
     # Note: do not exclude http/email/xml — urllib.request needs them.
 ) | ForEach-Object { "--exclude-module", $_ }
 
-Write-Host "Building executable..." -ForegroundColor Cyan
+$packaging = if ($OneDir) { "--onedir" } else { "--onefile" }
+Write-Host "Building executable ($packaging)..." -ForegroundColor Cyan
 & $venvPython -m PyInstaller `
-    --noconfirm --clean --onefile --noconsole `
+    --noconfirm --clean $packaging --noconsole `
     --name "ClaudeUsageWidget" `
     --icon "$root\app.ico" `
     @excludes `
     "$root\claude_usage_widget\__main__.py"
 
-$exe = Join-Path $root "dist\ClaudeUsageWidget.exe"
-if (-not (Test-Path $exe)) { throw "Build failed: $exe not found." }
+$exe = if ($OneDir) {
+    Join-Path $root "dist\ClaudeUsageWidget\ClaudeUsageWidget.exe"
+} else {
+    Join-Path $root "dist\ClaudeUsageWidget.exe"
+}
+if (-not (Test-Path $exe)) {
+    Write-Host "Build failed: $exe not found." -ForegroundColor Red
+    Write-Host "If the build looked successful, your antivirus may have quarantined" -ForegroundColor Yellow
+    Write-Host "the output. Check its history, or retry with -OneDir. You can also" -ForegroundColor Yellow
+    Write-Host "skip packaging: run 'python -m claude_usage_widget' and use the" -ForegroundColor Yellow
+    Write-Host "widget's 'Start with Windows' menu option instead." -ForegroundColor Yellow
+    throw "Executable not found after build."
+}
 
 $sizeMb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
 Write-Host "Built $exe ($sizeMb MB)" -ForegroundColor Green

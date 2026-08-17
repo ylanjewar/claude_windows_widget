@@ -42,11 +42,20 @@ python -m claude_usage_widget
 ```powershell
 .\build.ps1            # produces dist\ClaudeUsageWidget.exe
 .\build.ps1 -Install   # and adds it to the Startup folder
+.\build.ps1 -OneDir    # unpacked folder build
 ```
 
 The build trims the Qt modules the widget never loads, which roughly halves the
 bundle. If a build ever misbehaves, remove the `$excludes` block in `build.ps1`
 and rebuild — that trades size for certainty.
+
+**You do not have to build an executable.** Antivirus software frequently
+quarantines PyInstaller onefile builds, because unpacking and executing at
+runtime is also what malware packers do. Running from source avoids the issue
+entirely and still supports autostart: the widget's "Start with Windows" option
+registers `pythonw.exe -m claude_usage_widget`, which launches with no console
+window and nothing packed. If you do want an executable, `-OneDir` is flagged
+far less often than the default onefile build.
 
 ## Using it
 
@@ -178,6 +187,16 @@ off.
 own; the bars keep showing the last good values meanwhile.
 
 **Rows look wrong or are missing** — run the probe command above.
+
+**"The ordinal N could not be located in the dynamic link library"** — Windows
+loaded a `Qt6Core.dll` belonging to some other application instead of PySide6's.
+Run `where Qt6Core.dll`: if it reports a path outside your PySide6 folder, that
+copy is on your system PATH and shadowing the right one. Running inside a
+virtual environment usually resolves it; otherwise remove the offending entry
+from PATH. The same message can also mean a missing Visual C++ runtime — install
+the [latest Microsoft Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) —
+or a DLL your antivirus quarantined, in which case check its history and
+reinstall PySide6.
 
 ## Tests
 
