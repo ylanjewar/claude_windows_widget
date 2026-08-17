@@ -193,6 +193,22 @@ class WidgetAppTests(unittest.TestCase):
         self.assertIsNotNone(self.app.widget.state.snapshot)
         self.assertTrue(self.app.widget.state.status)
 
+    # -- packaging ------------------------------------------------------------
+
+    def test_entry_point_runs_without_a_parent_package(self):
+        """PyInstaller executes its entry script as a top-level `__main__`.
+
+        The package's own __main__.py uses relative imports, which cannot
+        resolve in that context — main.py exists to import absolutely instead.
+        Running it here with a non-"__main__" run_name exercises the imports
+        without launching the GUI.
+        """
+        import runpy
+
+        root = Path(__file__).resolve().parent.parent
+        namespace = runpy.run_path(str(root / "main.py"), run_name="frozen_entry")
+        self.assertTrue(callable(namespace.get("main")))
+
     # -- icon -----------------------------------------------------------------
 
     def test_write_ico_produces_a_valid_icon_file(self):

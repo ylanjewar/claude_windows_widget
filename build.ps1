@@ -90,7 +90,9 @@ $pyiArgs = @(
 )
 if ($iconPath) { $pyiArgs += @("--icon", $iconPath) }
 $pyiArgs += $excludes
-$pyiArgs += (Join-Path $root "claude_usage_widget\__main__.py")
+# Entry point must be main.py, not the package's __main__.py: PyInstaller runs
+# its entry script with no parent package, so relative imports there fail.
+$pyiArgs += (Join-Path $root "main.py")
 
 Write-Host "Building executable ($packaging)..." -ForegroundColor Cyan
 Invoke-Step "PyInstaller" { & $venvPython -m PyInstaller @pyiArgs }

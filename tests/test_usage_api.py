@@ -384,5 +384,37 @@ class CredentialTests(unittest.TestCase):
         self.assertIsNone(credentials.expired_seconds_ago())
 
 
+class PackagingTests(unittest.TestCase):
+    """Guards on the build wiring. No Qt needed, so these always run."""
+
+    @property
+    def root(self) -> Path:
+        return Path(__file__).resolve().parent.parent
+
+    def test_build_script_targets_the_absolute_import_entry_point(self):
+        script = (self.root / "build.ps1").read_text(encoding="utf-8")
+        self.assertIn("main.py", script)
+        self.assertNotIn(
+            "claude_usage_widget\\__main__.py",
+            script,
+            "PyInstaller must not use the package __main__; its relative "
+            "imports fail with no parent package.",
+        )
+
+    def test_entry_point_uses_an_absolute_import(self):
+        source = (self.root / "main.py").read_text(encoding="utf-8")
+        self.assertIn("from claude_usage_widget.app import main", source)
+        self.assertNotIn("from .", source)
+
+    def test_icon_is_not_a_hard_build_dependency(self):
+        """A failed icon must warn, not abort an otherwise good build."""
+        script = (self.root / "build.ps1").read_text(encoding="utf-8")
+        self.assertIn("building without a custom icon", script)
+
+    def test_native_command_exit_codes_are_checked(self):
+        script = (self.root / "build.ps1").read_text(encoding="utf-8")
+        self.assertIn("LASTEXITCODE", script)
+
+
 if __name__ == "__main__":
     unittest.main()
