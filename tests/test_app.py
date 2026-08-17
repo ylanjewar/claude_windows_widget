@@ -159,6 +159,40 @@ class WidgetAppTests(unittest.TestCase):
         self.assertGreater(widget.height(), short_height)
         widget.close()
 
+    # -- failure handling -----------------------------------------------------
+
+    def test_throttling_backs_off_exponentially(self):
+        self.app.current_interval = self.app.base_interval
+        self.app._on_failure("Rate limited.", "throttle")
+        first = self.app.current_interval
+        self.app._on_failure("Rate limited.", "throttle")
+        self.assertEqual(first, self.app.base_interval * 2)
+        self.assertEqual(self.app.current_interval, self.app.base_interval * 4)
+
+    def test_backoff_is_capped(self):
+        self.app.current_interval = self.app_module.MAX_BACKOFF_SECONDS
+        self.app._on_failure("Rate limited.", "throttle")
+        self.assertEqual(
+            self.app.current_interval, self.app_module.MAX_BACKOFF_SECONDS
+        )
+
+    def test_auth_failure_keeps_normal_cadence(self):
+        """Signing in fixes it, so do not disappear for half an hour."""
+        self.app.current_interval = self.app_module.MAX_BACKOFF_SECONDS
+        self.app._on_failure("Sign-in expired.", "auth")
+        self.assertEqual(self.app.current_interval, self.app.base_interval)
+
+    def test_success_resets_the_interval(self):
+        self.app.current_interval = self.app_module.MAX_BACKOFF_SECONDS
+        self.app._on_success(self._snapshot(5))
+        self.assertEqual(self.app.current_interval, self.app.base_interval)
+
+    def test_bars_survive_a_failure(self):
+        self.app._on_success(self._snapshot(12))
+        self.app._on_failure("Rate limited.", "throttle")
+        self.assertIsNotNone(self.app.widget.state.snapshot)
+        self.assertTrue(self.app.widget.state.status)
+
     def test_position_round_trips_through_config(self):
         from PySide6.QtCore import QPoint
 

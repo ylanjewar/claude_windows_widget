@@ -82,6 +82,24 @@ Claude Code stores it on Windows
 on every poll and the token never leaves your machine except in the request
 above. If you set `CLAUDE_CONFIG_DIR`, that location is used instead.
 
+### Signing in
+
+**The widget has no login screen, and does not need one.** It never handles your
+Google, email, or Anthropic credentials, and implements no OAuth flow of its own.
+
+You sign in once in Claude Code — `claude`, then `/login`, which opens a browser
+where "Continue with Google" works exactly as it always does. That flow hands
+Claude Code an OAuth token, Claude Code writes it to `.credentials.json`, and
+the widget reads that file. However you authenticated is invisible to the
+widget; all it ever sees is the resulting token.
+
+The one consequence: **Claude Code owns token refresh.** It renews the token
+whenever you use it, so under normal use the widget just keeps working. If you
+do not run Claude Code for long enough that the token expires, the widget says
+"Sign-in expired — open Claude Code to refresh it" and keeps checking every 5
+minutes; opening Claude Code clears it. The widget deliberately never writes to
+the credentials file, so it cannot disturb your Claude Code session.
+
 ### Two caveats worth knowing
 
 **The endpoint rate-limits aggressively.** Polling every 30–60s can get you
@@ -135,9 +153,11 @@ back below it, the threshold re-arms.
 **"No credentials at …"** — run `claude` in a terminal and sign in with
 `/login`.
 
-**"Token rejected"** — the access token expired. Claude Code refreshes it when
-you use it, so running `claude` once fixes this. The widget does not perform
-token refresh itself, deliberately: it only ever reads the credentials file.
+**"Sign-in expired …"** or **"Token rejected"** — run `claude` once and the CLI
+refreshes the token in place. The widget checks the token's expiry before each
+request, so it reports this without spending a doomed call against the rate
+limit, and it keeps retrying at the normal 5-minute cadence rather than backing
+off.
 
 **"Rate limited"** — the widget is already backing off. It will recover on its
 own; the bars keep showing the last good values meanwhile.

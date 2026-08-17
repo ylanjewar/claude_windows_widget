@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import os
 import sys
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from claude_usage_widget import credentials  # noqa: E402
 from claude_usage_widget.usage_api import (  # noqa: E402
     UsageError,
     format_reset,
@@ -116,6 +120,68 @@ class ResetFormattingTests(unittest.TestCase):
 
     def test_garbage_timestamp_is_blank(self):
         self.assertEqual(format_reset("not a date", now=NOW), "")
+
+
+class CredentialTests(unittest.TestCase):
+    """Credentials are read from CLAUDE_CONFIG_DIR when it is set."""
+
+    def setUp(self):
+        import tempfile
+
+        self.dir = tempfile.mkdtemp(prefix="claude-creds-")
+        self._previous = os.environ.get("CLAUDE_CONFIG_DIR")
+        os.environ["CLAUDE_CONFIG_DIR"] = self.dir
+
+    def tearDown(self):
+        if self._previous is None:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            os.environ["CLAUDE_CONFIG_DIR"] = self._previous
+
+    def _write(self, payload):
+        (Path(self.dir) / ".credentials.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+
+    def test_reads_nested_access_token(self):
+        self._write({"claudeAiOauth": {"accessToken": "sk-ant-oat01-abc"}})
+        self.assertEqual(credentials.read_access_token(), "sk-ant-oat01-abc")
+
+    def test_reads_snake_case_access_token(self):
+        self._write({"access_token": "sk-ant-oat01-xyz"})
+        self.assertEqual(credentials.read_access_token(), "sk-ant-oat01-xyz")
+
+    def test_missing_file_raises(self):
+        with self.assertRaises(credentials.CredentialError):
+            credentials.read_access_token()
+
+    def test_token_without_value_raises(self):
+        self._write({"claudeAiOauth": {"refreshToken": "sk-ant-ort01-abc"}})
+        with self.assertRaises(credentials.CredentialError):
+            credentials.read_access_token()
+
+    def test_future_expiry_is_not_stale(self):
+        future = int((time.time() + 3600) * 1000)
+        self._write({"claudeAiOauth": {"accessToken": "t", "expiresAt": future}})
+        self.assertIsNone(credentials.expired_seconds_ago())
+
+    def test_past_expiry_reports_age(self):
+        past = int((time.time() - 7200) * 1000)
+        self._write({"claudeAiOauth": {"accessToken": "t", "expiresAt": past}})
+        stale = credentials.expired_seconds_ago()
+        self.assertIsNotNone(stale)
+        self.assertAlmostEqual(stale, 7200, delta=30)
+
+    def test_expiry_in_seconds_is_accepted(self):
+        past = int(time.time() - 600)
+        self._write({"claudeAiOauth": {"accessToken": "t", "expiresAt": past}})
+        stale = credentials.expired_seconds_ago()
+        self.assertIsNotNone(stale)
+        self.assertAlmostEqual(stale, 600, delta=30)
+
+    def test_absent_expiry_is_unknown(self):
+        self._write({"claudeAiOauth": {"accessToken": "t"}})
+        self.assertIsNone(credentials.expired_seconds_ago())
 
 
 if __name__ == "__main__":

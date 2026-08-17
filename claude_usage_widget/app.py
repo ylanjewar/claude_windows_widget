@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import startup
 from .config import DISPLAY_NAME, Config
-from .credentials import CredentialError, read_access_token
+from .credentials import CredentialError, expired_seconds_ago, read_access_token
 from .icon import make_icon
 from .usage_api import UsageError, UsageSnapshot, load_snapshot
 
@@ -24,7 +24,8 @@ class Poller(QObject):
     """Runs the blocking fetch off the UI thread; signals are auto-queued back."""
 
     succeeded = Signal(object)
-    failed = Signal(str, bool)
+    # (message, kind) where kind is one of auth / throttle / network / fatal.
+    failed = Signal(str, str)
 
     def __init__(self, config: Config) -> None:
         super().__init__()
@@ -43,13 +44,31 @@ class Poller(QObject):
     def _run(self) -> None:
         try:
             token = read_access_token()
+            stale_for = expired_seconds_ago()
+            if stale_for is not None:
+                hours = stale_for / 3600
+                ago = f"{hours:.0f} hr" if hours >= 1 else f"{stale_for / 60:.0f} min"
+                raise UsageError(
+                    f"Sign-in expired {ago} ago. Open Claude Code to refresh it.",
+                    retryable=False,
+                    status=401,
+                )
             snapshot = load_snapshot(token, self._config.get("user_agent"))
         except CredentialError as exc:
-            self.failed.emit(str(exc), False)
+            # Recoverable by signing in, so treat it like an auth failure.
+            self.failed.emit(str(exc), "auth")
         except UsageError as exc:
-            self.failed.emit(str(exc), exc.retryable)
+            if exc.status in (401, 403):
+                kind = "auth"
+            elif exc.status == 429:
+                kind = "throttle"
+            elif exc.retryable:
+                kind = "network"
+            else:
+                kind = "fatal"
+            self.failed.emit(str(exc), kind)
         except Exception as exc:  # noqa: BLE001 - never let the poller die silently
-            self.failed.emit(f"Unexpected error: {exc}", True)
+            self.failed.emit(f"Unexpected error: {exc}", "network")
         else:
             self.succeeded.emit(snapshot)
         finally:
@@ -136,15 +155,19 @@ class WidgetApp(QObject):
         self._check_notifications(snapshot)
         self._schedule(self.base_interval)
 
-    def _on_failure(self, message: str, retryable: bool) -> None:
-        if retryable:
+    def _on_failure(self, message: str, kind: str) -> None:
+        if kind in ("throttle", "network"):
             # The usage endpoint rate-limits hard, so back off rather than hammer it.
             self._schedule(min(self.current_interval * 2, MAX_BACKOFF_SECONDS))
-            minutes = max(1, self.current_interval // 60)
-            suffix = f" Retrying in {minutes} min."
+        elif kind == "auth":
+            # Resolved by the user running Claude Code, so keep checking at the
+            # normal cadence instead of backing off into a long sleep.
+            self._schedule(self.base_interval)
         else:
             self._schedule(MAX_BACKOFF_SECONDS)
-            suffix = ""
+
+        minutes = max(1, self.current_interval // 60)
+        suffix = "" if kind == "fatal" else f" Retrying in {minutes} min."
         self.widget.set_error(f"{message}{suffix}")
         self.tray.setToolTip(f"{DISPLAY_NAME} — {message}")
 

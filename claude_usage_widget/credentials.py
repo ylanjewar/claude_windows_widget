@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -82,5 +83,21 @@ def token_expiry_ms() -> int | None:
     for key in ("expiresAt", "expires_at"):
         value = _find_key(data, key)
         if isinstance(value, (int, float)):
-            return int(value)
+            number = int(value)
+            # Some writers use seconds rather than milliseconds.
+            return number if number > 10**12 else number * 1000
     return None
+
+
+def expired_seconds_ago() -> float | None:
+    """Seconds since the token expired, or None if it is valid or unknown.
+
+    Claude Code refreshes the token whenever you use it, so an expired token
+    means the CLI simply has not run in a while. Checking first avoids spending
+    a request — and rate-limit budget — on a call that is certain to 401.
+    """
+    expiry = token_expiry_ms()
+    if expiry is None:
+        return None
+    delta = time.time() - expiry / 1000
+    return delta if delta > 0 else None
