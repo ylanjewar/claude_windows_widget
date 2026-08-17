@@ -272,6 +272,56 @@ class ResetFormattingTests(unittest.TestCase):
         self.assertEqual(format_reset("not a date", now=NOW), "")
 
 
+@unittest.skipUnless(hasattr(time, "tzset"), "TZ cannot be changed at runtime here")
+class LocalTimeZoneTests(unittest.TestCase):
+    """Reset times must render in the machine's local zone, DST included.
+
+    format_reset uses datetime.astimezone() with no argument, which resolves
+    against the OS timezone database — so the same UTC instant reads as PDT in
+    August and PST in December without any configuration.
+    """
+
+    def setUp(self):
+        self._previous = os.environ.get("TZ")
+        os.environ["TZ"] = "America/Los_Angeles"
+        time.tzset()
+
+    def tearDown(self):
+        if self._previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self._previous
+        time.tzset()
+
+    def test_weekly_reset_renders_in_pacific_daylight_time(self):
+        """The fixture's 2026-08-22T00:00Z is Friday 5pm PDT (UTC-7)."""
+        reset = FIXTURE["seven_day"]["resets_at"]
+        now = datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc)
+        self.assertEqual(format_reset(reset, now=now), "Resets Fri 5:00 PM")
+
+    def test_winter_reset_renders_in_pacific_standard_time(self):
+        """The same wall clock in December is PST (UTC-8), an hour earlier."""
+        now = datetime(2026, 12, 1, 12, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            format_reset("2026-12-05T00:00:00+00:00", now=now), "Resets Fri 4:00 PM"
+        )
+
+    def test_relative_form_is_timezone_independent(self):
+        now = datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            format_reset("2026-08-17T16:44:00+00:00", now=now), "Resets in 4 hr 44 min"
+        )
+
+    def test_utc_machine_would_render_differently(self):
+        """Guards against silently falling back to UTC."""
+        reset = FIXTURE["seven_day"]["resets_at"]
+        now = datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc)
+        pacific = format_reset(reset, now=now)
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+        self.assertNotEqual(pacific, format_reset(reset, now=now))
+
+
 class CredentialTests(unittest.TestCase):
     """Credentials are read from CLAUDE_CONFIG_DIR when it is set."""
 
