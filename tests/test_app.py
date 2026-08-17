@@ -1,0 +1,170 @@
+"""Widget and notification tests. Skipped automatically when PySide6 is absent."""
+
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Keep the test run out of the real config location.
+os.environ["APPDATA"] = tempfile.mkdtemp(prefix="claude-usage-tests-")
+
+try:
+    from PySide6.QtWidgets import QMenu  # noqa: F401
+
+    HAVE_QT = True
+except ImportError:  # pragma: no cover - depends on the environment
+    HAVE_QT = False
+
+NOW = datetime.now(timezone.utc)
+
+
+def iso(**delta) -> str:
+    return (NOW + timedelta(**delta)).isoformat().replace("+00:00", "Z")
+
+
+@unittest.skipUnless(HAVE_QT, "PySide6 is not installed")
+class WidgetAppTests(unittest.TestCase):
+    app = None
+
+    @classmethod
+    def setUpClass(cls):
+        from claude_usage_widget import app as app_module
+
+        cls.app_module = app_module
+        cls.app = app_module.WidgetApp([sys.argv[0]])
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.app is not None:
+            cls.app.widget.close()
+
+    def setUp(self):
+        self.app.config.set("notified", {})
+
+    # -- colour ---------------------------------------------------------------
+
+    def test_bar_colour_thresholds(self):
+        """Only the bar fill changes colour: blue, then yellow at 70, red at 85."""
+        colour = self.app.widget.fill_colour
+        self.assertEqual(colour(0).name(), "#2f80f5")
+        self.assertEqual(colour(69.9).name(), "#2f80f5")
+        self.assertEqual(colour(70).name(), "#e0a32e")
+        self.assertEqual(colour(84.9).name(), "#e0a32e")
+        self.assertEqual(colour(85).name(), "#e5484d")
+        self.assertEqual(colour(100).name(), "#e5484d")
+
+    def test_panel_chrome_is_not_recoloured(self):
+        from claude_usage_widget import widget as widget_module
+
+        self.assertEqual(widget_module.PANEL_BG.name(), "#202023")
+
+    # -- notifications --------------------------------------------------------
+
+    def _snapshot(self, five_hour_percent: float):
+        from claude_usage_widget.usage_api import parse_usage
+
+        return parse_usage(
+            {
+                "five_hour": {"utilization": five_hour_percent, "resets_at": iso(hours=1)},
+                "seven_day": {"utilization": 10, "resets_at": iso(days=2)},
+            }
+        )
+
+    def _capture(self):
+        toasts: list[tuple[str, int]] = []
+        self.app._notify = lambda row, threshold: toasts.append((row.key, threshold))
+        return toasts
+
+    def test_notifies_once_at_highest_crossed_threshold(self):
+        toasts = self._capture()
+        self.app._check_notifications(self._snapshot(82))
+        self.assertEqual(toasts, [("five_hour", 80)])
+
+    def test_does_not_repeat_on_subsequent_polls(self):
+        toasts = self._capture()
+        snapshot = self._snapshot(82)
+        self.app._check_notifications(snapshot)
+        toasts.clear()
+        self.app._check_notifications(snapshot)
+        self.assertEqual(toasts, [])
+
+    def test_crossing_second_threshold_notifies_again(self):
+        toasts = self._capture()
+        self.app._check_notifications(self._snapshot(72))
+        self.assertEqual(toasts, [("five_hour", 70)])
+        toasts.clear()
+        self.app._check_notifications(self._snapshot(81))
+        self.assertEqual(toasts, [("five_hour", 80)])
+
+    def test_window_reset_clears_state_and_rearms(self):
+        toasts = self._capture()
+        self.app._check_notifications(self._snapshot(82))
+        toasts.clear()
+        self.app._check_notifications(self._snapshot(3))  # window rolled over
+        self.assertEqual(self.app.config.get("notified").get("five_hour"), [])
+        self.app._check_notifications(self._snapshot(82))
+        self.assertEqual(toasts, [("five_hour", 80)])
+
+    def test_below_threshold_is_silent(self):
+        toasts = self._capture()
+        self.app._check_notifications(self._snapshot(69))
+        self.assertEqual(toasts, [])
+
+    # -- menu and layout ------------------------------------------------------
+
+    def test_menu_contains_core_actions(self):
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu()
+        self.app._populate_menu(menu)
+        labels = [action.text() for action in menu.actions()]
+        for expected in ("Refresh now", "Always on top", "Start with Windows", "Quit"):
+            self.assertIn(expected, labels)
+
+    def test_height_grows_with_row_count(self):
+        from claude_usage_widget.widget import UsageWidget
+
+        widget = UsageWidget(70, 85)
+        widget.set_snapshot(self._snapshot(10))
+        two_rows = widget.height()
+        from claude_usage_widget.usage_api import parse_usage
+
+        widget.set_snapshot(
+            parse_usage(
+                {
+                    "five_hour": {"utilization": 1, "resets_at": iso(hours=1)},
+                    "seven_day": {"utilization": 2, "resets_at": iso(days=1)},
+                    "seven_day_opus": {"utilization": 3, "resets_at": iso(days=1)},
+                }
+            )
+        )
+        self.assertGreater(widget.height(), two_rows)
+        widget.close()
+
+    def test_long_error_message_is_not_clipped(self):
+        from claude_usage_widget.widget import UsageWidget
+
+        widget = UsageWidget(70, 85)
+        short = "Short."
+        widget.set_error(short)
+        short_height = widget.height()
+        widget.set_error(short * 40)
+        self.assertGreater(widget.height(), short_height)
+        widget.close()
+
+    def test_position_round_trips_through_config(self):
+        from PySide6.QtCore import QPoint
+
+        self.app._save_position(QPoint(321, 123))
+        self.assertEqual(self.app.config.get("position"), [321, 123])
+
+
+if __name__ == "__main__":
+    unittest.main()

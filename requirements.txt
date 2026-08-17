@@ -1,0 +1,3 @@
+# Essentials is roughly a third the size of the full PySide6 wheel and has
+# everything this widget uses (QtCore/QtGui/QtWidgets).
+PySide6-Essentials>=6.6,<7
