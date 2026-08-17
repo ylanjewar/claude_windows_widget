@@ -19,6 +19,7 @@
 param(
     [switch]$Install,
     [switch]$OneDir,
+    [switch]$Trim,
     [string]$Python = "python"
 )
 
@@ -40,16 +41,24 @@ Write-Host "Installing dependencies..." -ForegroundColor Cyan
 Write-Host "Generating icon..." -ForegroundColor Cyan
 & $venvPython -m claude_usage_widget.icon "$root\app.ico"
 
-# Trim Qt modules the widget never touches; this roughly halves the bundle.
-$excludes = @(
-    "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuickWidgets", "PySide6.QtQuick3D",
-    "PySide6.QtNetwork", "PySide6.QtSql", "PySide6.QtTest", "PySide6.QtPdf",
-    "PySide6.QtPdfWidgets", "PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets",
-    "PySide6.QtPrintSupport", "PySide6.QtDBus", "PySide6.QtHelp", "PySide6.QtDesigner",
-    "PySide6.QtCharts", "PySide6.QtMultimedia", "PySide6.QtWebEngineCore",
-    "tkinter", "unittest", "pydoc"
-    # Note: do not exclude http/email/xml — urllib.request needs them.
-) | ForEach-Object { "--exclude-module", $_ }
+# Trimming Qt modules shrinks the bundle but can drop a DLL that a module we do
+# use depends on, producing an "ordinal could not be located" failure at launch.
+# Correctness first: build everything unless -Trim is passed explicitly.
+$excludes = @()
+if ($Trim) {
+    Write-Host "Trimming unused Qt modules (-Trim). If the build fails to" -ForegroundColor Yellow
+    Write-Host "launch, rebuild without -Trim." -ForegroundColor Yellow
+    $excludes = @(
+        "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuickWidgets", "PySide6.QtQuick3D",
+        "PySide6.QtSql", "PySide6.QtTest", "PySide6.QtPdf", "PySide6.QtPdfWidgets",
+        "PySide6.QtCharts", "PySide6.QtMultimedia", "PySide6.QtWebEngineCore",
+        "PySide6.QtDesigner", "PySide6.QtHelp",
+        "tkinter", "unittest", "pydoc"
+        # Do not exclude http/email/xml — urllib.request needs them. Do not
+        # exclude QtNetwork, QtOpenGL, QtDBus or QtPrintSupport: QtGui and
+        # QtWidgets link against them even though this code never imports them.
+    ) | ForEach-Object { "--exclude-module", $_ }
+}
 
 $packaging = if ($OneDir) { "--onedir" } else { "--onefile" }
 Write-Host "Building executable ($packaging)..." -ForegroundColor Cyan

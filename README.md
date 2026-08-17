@@ -43,11 +43,14 @@ python -m claude_usage_widget
 .\build.ps1            # produces dist\ClaudeUsageWidget.exe
 .\build.ps1 -Install   # and adds it to the Startup folder
 .\build.ps1 -OneDir    # unpacked folder build
+.\build.ps1 -Trim      # smaller bundle, drops unused Qt modules
 ```
 
-The build trims the Qt modules the widget never loads, which roughly halves the
-bundle. If a build ever misbehaves, remove the `$excludes` block in `build.ps1`
-and rebuild — that trades size for certainty.
+`-Trim` roughly halves the bundle by excluding Qt modules this code never
+imports. It is off by default because excluding a module can also drop a DLL
+that QtGui or QtWidgets links against, and the resulting executable fails at
+launch with "the ordinal N could not be located in the dynamic link library".
+If a trimmed build won't start, rebuild without `-Trim`.
 
 **You do not have to build an executable.** Antivirus software frequently
 quarantines PyInstaller onefile builds, because unpacking and executing at
@@ -188,13 +191,18 @@ own; the bars keep showing the last good values meanwhile.
 
 **Rows look wrong or are missing** — run the probe command above.
 
-**"The ordinal N could not be located in the dynamic link library"** — Windows
-loaded a `Qt6Core.dll` belonging to some other application instead of PySide6's.
-Run `where Qt6Core.dll`: if it reports a path outside your PySide6 folder, that
-copy is on your system PATH and shadowing the right one. Running inside a
-virtual environment usually resolves it; otherwise remove the offending entry
-from PATH. The same message can also mean a missing Visual C++ runtime — install
-the [latest Microsoft Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) —
+**"The ordinal N could not be located in the dynamic link library"** — read
+which file the dialog names.
+
+If it names `ClaudeUsageWidget.exe` itself, the packaged bundle is incomplete.
+Rebuild without `-Trim`, or use `-OneDir`, or skip packaging and run from source.
+
+If it names a `Qt6*.dll`, Windows loaded another application's Qt instead of
+PySide6's. Run `where Qt6Core.dll`: a path outside your PySide6 folder is on your
+system PATH and shadowing the right one. A virtual environment usually resolves
+it; otherwise remove that PATH entry. The same message can also mean a missing
+Visual C++ runtime — install the
+[latest Microsoft Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) —
 or a DLL your antivirus quarantined, in which case check its history and
 reinstall PySide6.
 
