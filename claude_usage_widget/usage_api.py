@@ -71,7 +71,7 @@ class UsageSnapshot:
 _cached_user_agent: str | None = None
 
 
-def _cli_candidates() -> list[str]:
+def cli_candidates() -> list[str]:
     """Places the Claude Code launcher turns up on Windows, PATH first."""
     found: list[str] = []
     for name in ("claude", "claude.cmd", "claude.exe", "claude.ps1"):
@@ -123,7 +123,7 @@ def _run_version(executable: str) -> str | None:
 
 def detect_cli_version() -> str | None:
     """Version of the installed Claude Code CLI, or None if it cannot be found."""
-    for candidate in _cli_candidates():
+    for candidate in cli_candidates():
         version = _run_version(candidate)
         if version:
             return version

@@ -8,11 +8,11 @@
     "decimal_places": 2,
     "disabled_reason": null,
     "is_enabled": true,
-    "monthly_limit": 5000,
+    "monthly_limit": 10000,
     "spend_limit_reached": false,
-    "used_credits": 1388.0,
+    "used_credits": 1234.0,
     "user_disabled": false,
-    "utilization": 27.76,
+    "utilization": 12.34,
     "weekly": null
   },
   "five_hour": {
@@ -20,7 +20,7 @@
     "remaining_dollars": null,
     "resets_at": "2026-08-17T08:10:00.062855+00:00",
     "used_dollars": null,
-    "utilization": 11.0
+    "utilization": 8.0
   },
   "iguana_necktie": null,
   "limits": [
@@ -28,7 +28,7 @@
       "group": "session",
       "is_active": false,
       "kind": "session",
-      "percent": 11,
+      "percent": 8,
       "resets_at": "2026-08-17T08:10:00.062855+00:00",
       "scope": null,
       "severity": "normal"
@@ -37,7 +37,7 @@
       "group": "weekly",
       "is_active": false,
       "kind": "weekly_all",
-      "percent": 21,
+      "percent": 72,
       "resets_at": "2026-08-22T00:00:00.062879+00:00",
       "scope": null,
       "severity": "normal"
@@ -46,7 +46,7 @@
       "group": "weekly",
       "is_active": true,
       "kind": "weekly_scoped",
-      "percent": 26,
+      "percent": 91,
       "resets_at": "2026-08-22T00:00:00.063118+00:00",
       "scope": {
         "model": {
@@ -72,7 +72,7 @@
     "remaining_dollars": null,
     "resets_at": "2026-08-22T00:00:00.062879+00:00",
     "used_dollars": null,
-    "utilization": 21.0
+    "utilization": 72.0
   },
   "seven_day_cowork": null,
   "seven_day_oauth_apps": null,
@@ -84,14 +84,28 @@
     "balance": null,
     "can_purchase_credits": false,
     "can_toggle": false,
-    "cap": { "credits": { "amount_minor": 5000, "exponent": 2 }, "money": null },
+    "cap": {
+      "credits": {
+        "amount_minor": 10000,
+        "exponent": 2
+      },
+      "money": null
+    },
     "disabled_reason": null,
     "disclaimer": "Usage credits cover you when you hit your plan limits.",
     "enabled": true,
-    "limit": { "amount_minor": 5000, "currency": "USD", "exponent": 2 },
-    "percent": 28,
+    "limit": {
+      "amount_minor": 10000,
+      "currency": "USD",
+      "exponent": 2
+    },
+    "percent": 12,
     "severity": "normal",
-    "used": { "amount_minor": 1388, "currency": "USD", "exponent": 2 }
+    "used": {
+      "amount_minor": 1234,
+      "currency": "USD",
+      "exponent": 2
+    }
   },
   "tangelo": null
 }

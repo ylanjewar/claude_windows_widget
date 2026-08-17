@@ -1,0 +1,98 @@
+name: Release
+
+# Builds the Windows executable on a clean GitHub runner and publishes it with
+# a SHA256 checksum and a signed build-provenance attestation. That gives users
+# something better than a code-signing certificate can offer on its own: a
+# cryptographic link from the published binary back to this exact commit and
+# workflow, verifiable with `gh attestation verify`.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the release
+  id-token: write # sign the attestation
+  attestations: write # record it
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover -s tests
+
+      - name: Generate icon
+        run: python -m claude_usage_widget.icon app.ico
+
+      # --onedir rather than --onefile: it does not unpack to %TEMP% at each
+      # launch, which antivirus heuristics treat far more kindly.
+      - name: Build
+        run: >
+          pyinstaller --noconfirm --clean --onedir --noconsole
+          --name ClaudeUsageWidget --icon app.ico main.py
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          $name = "ClaudeUsageWidget-$version-windows-x64.zip"
+          Compress-Archive -Path dist\ClaudeUsageWidget\* -DestinationPath $name
+          $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name" | Out-File -Encoding ascii SHA256SUMS.txt
+          "ASSET=$name" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
+          Write-Host "$hash  $name"
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.ASSET }}
+
+      # gh is preinstalled on the runner, so this needs no third-party action.
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Literal here-string: no PowerShell interpolation, so backticks and
+          # $ in the notes survive. ${{ }} is substituted by Actions beforehand.
+          $notes = @'
+          Unofficial community project. Not affiliated with or endorsed by Anthropic.
+
+          **Verify before running.** Compare against `SHA256SUMS.txt`:
+
+          ```powershell
+          (Get-FileHash ClaudeUsageWidget-*.zip -Algorithm SHA256).Hash.ToLower()
+          ```
+
+          The binary is unsigned, so SmartScreen and some antivirus products will
+          warn about it. Build provenance is attested instead — this verifies the
+          binary was built by this repository from this commit, which a signing
+          certificate alone does not tell you:
+
+          ```
+          gh attestation verify ClaudeUsageWidget-*.zip --repo OWNER/REPO
+          ```
+
+          Prefer not to trust a prebuilt binary? Run from source; see the README.
+          '@
+          $notes = $notes -replace 'OWNER/REPO', '${{ github.repository }}'
+          $notes | Out-File -Encoding utf8 release-notes.md
+
+          gh release create "${{ github.ref_name }}" `
+            "$env:ASSET" SHA256SUMS.txt `
+            --title "${{ github.ref_name }}" `
+            --notes-file release-notes.md

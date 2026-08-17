@@ -49,7 +49,7 @@ class Poller(QObject):
                 hours = stale_for / 3600
                 ago = f"{hours:.0f} hr" if hours >= 1 else f"{stale_for / 60:.0f} min"
                 raise UsageError(
-                    f"Sign-in expired {ago} ago. Open Claude Code to refresh it.",
+                    f"Sign-in expired {ago} ago. Right-click → Open Claude Code.",
                     retryable=False,
                     status=401,
                 )
@@ -126,6 +126,9 @@ class WidgetApp(QObject):
         self.tray.show()
 
         self.last_snapshot: UsageSnapshot | None = None
+        # True while the failure is an expired or rejected sign-in, which the
+        # user resolves by running Claude Code rather than by waiting.
+        self.needs_signin = False
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -148,6 +151,7 @@ class WidgetApp(QObject):
     # -- poll results --------------------------------------------------------
 
     def _on_success(self, snapshot: UsageSnapshot) -> None:
+        self.needs_signin = False
         self.last_snapshot = snapshot
         self.widget.set_snapshot(snapshot)
         self.widget.set_status("")
@@ -156,6 +160,7 @@ class WidgetApp(QObject):
         self._schedule(self.base_interval)
 
     def _on_failure(self, message: str, kind: str) -> None:
+        self.needs_signin = kind == "auth"
         if kind in ("throttle", "network"):
             # The usage endpoint rate-limits hard, so back off rather than hammer it.
             self._schedule(min(self.current_interval * 2, MAX_BACKOFF_SECONDS))
@@ -242,6 +247,13 @@ class WidgetApp(QObject):
         refresh = QAction("Refresh now", menu)
         refresh.triggered.connect(self.refresh_now)
         menu.addAction(refresh)
+
+        # Surfaced only when it is the actual fix, to keep the menu short.
+        if self.needs_signin:
+            signin = QAction("Open Claude Code to refresh sign-in", menu)
+            signin.triggered.connect(self._open_claude_cli)
+            menu.addAction(signin)
+
         menu.addSeparator()
 
         on_top = QAction("Always on top", menu)
@@ -302,6 +314,16 @@ class WidgetApp(QObject):
             self.tray.showMessage(
                 "Could not change autostart", error, QSystemTrayIcon.Warning, 8000
             )
+
+    def _open_claude_cli(self) -> None:
+        ok, error = startup.open_claude_cli()
+        if not ok:
+            self.tray.showMessage(
+                "Could not open Claude Code", error, QSystemTrayIcon.Warning, 8000
+            )
+            return
+        # Give the CLI a moment to start and refresh the token before retrying.
+        QTimer.singleShot(15_000, self.refresh_now)
 
     def _create_desktop_shortcut(self) -> None:
         ok, error = startup.create_desktop_shortcut()

@@ -43,6 +43,32 @@ def _launch_target() -> tuple[str, str, str]:
     return str(interpreter), "-m claude_usage_widget", str(project_root)
 
 
+def open_claude_cli() -> tuple[bool, str]:
+    """Open Claude Code in a terminal so it refreshes the OAuth token.
+
+    Claude Code renews the token on startup. This widget only ever reads the
+    credentials file — it deliberately never refreshes the token itself, since
+    refresh tokens rotate and consuming one here would invalidate the CLI's own
+    session. Launching the CLI is the safe way to get a fresh token.
+    """
+    if os.name != "nt":
+        return False, "Only supported on Windows."
+
+    from .usage_api import cli_candidates
+
+    candidates = cli_candidates()
+    if not candidates:
+        return False, (
+            "Could not find the Claude Code CLI. Install it, then run `claude` "
+            "once to refresh your sign-in."
+        )
+    try:
+        subprocess.Popen(["cmd", "/c", "start", "Claude Code", candidates[0]])
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"Could not launch Claude Code: {exc}"
+    return True, ""
+
+
 def _icon_path() -> str:
     """The generated app icon, if a build produced one."""
     candidate = Path(__file__).resolve().parent.parent / "app.ico"

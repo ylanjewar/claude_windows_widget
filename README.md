@@ -1,5 +1,10 @@
 # Claude Usage Widget
 
+> **Unofficial community project.** Not affiliated with, endorsed by, or
+> supported by Anthropic. "Claude" is Anthropic's trademark; this project only
+> uses the name to describe what it displays. It reads an undocumented endpoint
+> that can change or stop working without notice.
+
 An always-on-top desktop widget for Windows 11 that mirrors Claude Code's
 `/usage` panel: your 5-hour limit, weekly limits, and usage credits, refreshed
 every 5 minutes.
@@ -220,6 +225,47 @@ Visual C++ runtime — install the
 [latest Microsoft Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) —
 or a DLL your antivirus quarantined, in which case check its history and
 reinstall PySide6.
+
+## What it does with your credentials
+
+This widget reads your Claude Code OAuth token, so it is worth being precise
+about what happens to it.
+
+- It reads `%USERPROFILE%\.claude\.credentials.json` and sends the access token
+  to `https://api.anthropic.com/api/oauth/usage`. That is the only network
+  request the program ever makes.
+- It **never writes** to the credentials file. Token refresh belongs to Claude
+  Code: refresh tokens rotate, so consuming one here could invalidate your CLI
+  session. When the token expires the widget says so and waits.
+- No telemetry, no analytics, no crash reporting, no update check.
+- Settings go to `%APPDATA%\ClaudeUsageWidget\config.json`, which holds no
+  secrets — only window position, thresholds, and which notifications have
+  fired.
+- `probe` redacts its output: tokens appear only as their last six characters
+  and long strings become `<str len=N>`, so it is safe to paste into an issue.
+
+The relevant code is short and worth reading yourself before you trust it:
+[`credentials.py`](claude_usage_widget/credentials.py) and
+[`usage_api.py`](claude_usage_widget/usage_api.py).
+
+## Verifying a release
+
+Released binaries are unsigned, so Windows SmartScreen and some antivirus
+products will warn about them. Rather than a code-signing certificate, releases
+carry a [build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds):
+
+```powershell
+gh attestation verify ClaudeUsageWidget-*.zip --repo <owner>/claude_windows_widget
+(Get-FileHash ClaudeUsageWidget-*.zip -Algorithm SHA256).Hash.ToLower()
+```
+
+That proves the binary was built by this repository's workflow from a specific
+commit — a stronger claim than a signature, which only says someone paid a
+certificate authority. Every release is built on a clean GitHub runner from
+tagged source, never uploaded from a developer machine.
+
+If you would rather not trust a prebuilt binary at all, run from source. It
+takes one `pip install` and behaves identically.
 
 ## Tests
 

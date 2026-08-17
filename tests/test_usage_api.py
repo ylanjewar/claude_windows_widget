@@ -56,7 +56,7 @@ class RealResponseTests(unittest.TestCase):
         )
 
     def test_percentages(self):
-        self.assertEqual([round(row.percent, 2) for row in self.rows], [11, 21, 26, 28])
+        self.assertEqual([round(row.percent, 2) for row in self.rows], [8, 72, 91, 12])
 
     def test_scoped_weekly_limit_comes_from_the_limits_array(self):
         """seven_day_opus is null; the Fable cap only exists in `limits`."""
@@ -66,8 +66,8 @@ class RealResponseTests(unittest.TestCase):
         self.assertEqual(fable.key, "weekly_scoped:fable")
 
     def test_credits_are_minor_units(self):
-        """amount_minor 1388 with exponent 2 is $13.88, not $1,388."""
-        self.assertEqual(self.rows[3].detail, "$13.88 of $50.00")
+        """amount_minor 1234 with exponent 2 is $12.34, not $1,234."""
+        self.assertEqual(self.rows[3].detail, "$12.34 of $100.00")
 
     def test_placeholder_objects_are_not_rendered(self):
         """nimbus_quill is all-null at 0% — noise, not a limit."""
@@ -142,7 +142,7 @@ class LimitsArrayTests(unittest.TestCase):
 class CreditsTests(unittest.TestCase):
     def test_spend_is_preferred_over_extra_usage(self):
         row = parse_usage(FIXTURE).rows[-1]
-        self.assertEqual(row.percent, 28)  # spend.percent, matching the panel
+        self.assertEqual(row.percent, 12)  # spend.percent, matching the panel
 
     def test_extra_usage_fallback_also_scales_minor_units(self):
         payload = {
@@ -150,13 +150,13 @@ class CreditsTests(unittest.TestCase):
             "extra_usage": {
                 "is_enabled": True,
                 "decimal_places": 2,
-                "used_credits": 1388.0,
-                "monthly_limit": 5000,
-                "utilization": 27.76,
+                "used_credits": 1234.0,
+                "monthly_limit": 10000,
+                "utilization": 12.34,
             },
         }
         row = parse_usage(payload).rows[-1]
-        self.assertEqual(row.detail, "$13.88 of $50.00")
+        self.assertEqual(row.detail, "$12.34 of $100.00")
 
     def test_disabled_spend_is_skipped(self):
         payload = dict(FIXTURE)

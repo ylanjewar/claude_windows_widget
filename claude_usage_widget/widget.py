@@ -143,6 +143,20 @@ class UsageWidget(QWidget):
         )
         return max(24, bounds.height())
 
+    def _footer_height(self) -> int:
+        """Wrapped status height, capped at two lines.
+
+        Eliding a status to one line hides the part that says what to do about
+        it, which is the only part that matters.
+        """
+        if not self.state.status:
+            return 0
+        metrics = QFontMetrics(self._font(8.5))
+        bounds = metrics.boundingRect(
+            QRect(0, 0, WIDTH - PAD_X * 2, 0), WRAP_FLAGS, self.state.status
+        )
+        return min(bounds.height(), metrics.lineSpacing() * 2) + 6
+
     def _recalculate_height(self) -> None:
         height = PAD_TOP + HEADER_HEIGHT + HEADER_GAP
         rows = self.state.snapshot.rows if self.state.snapshot else []
@@ -153,7 +167,7 @@ class UsageWidget(QWidget):
             height += self._placeholder_height()
         # The footer is for status alongside bars; a bare error owns the body instead.
         if self.state.status and rows:
-            height += FOOTER_HEIGHT
+            height += self._footer_height()
         height += PAD_BOTTOM
         self.setFixedHeight(int(height))
 
@@ -283,17 +297,13 @@ class UsageWidget(QWidget):
         return y + height
 
     def _paint_footer(self, painter: QPainter) -> None:
-        text = self.state.status or self.state.error
         painter.setFont(self._font(8.5))
         painter.setPen(STATUS_ALERT_FG if self.state.status_is_alert else STATUS_FG)
+        height = self._footer_height()
         rect = QRect(
-            PAD_X, self.height() - PAD_BOTTOM - FOOTER_HEIGHT, WIDTH - PAD_X * 2, FOOTER_HEIGHT
+            PAD_X, self.height() - PAD_BOTTOM - height, WIDTH - PAD_X * 2, height
         )
-        painter.drawText(
-            rect,
-            Qt.AlignLeft | Qt.AlignVCenter,
-            QFontMetrics(painter.font()).elidedText(text, Qt.ElideRight, rect.width()),
-        )
+        painter.drawText(rect, WRAP_FLAGS, self.state.status)
 
     # -- interaction ---------------------------------------------------------
 
