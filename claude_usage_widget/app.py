@@ -11,7 +11,12 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import startup
 from .config import DISPLAY_NAME, Config
-from .credentials import CredentialError, expired_seconds_ago, read_access_token
+from .credentials import (
+    ENV_TOKEN_VAR,
+    CredentialError,
+    expired_seconds_ago,
+    read_token,
+)
 from .icon import make_icon
 from .usage_api import UsageError, UsageSnapshot, load_snapshot
 
@@ -42,24 +47,33 @@ class Poller(QObject):
         return True
 
     def _run(self) -> None:
+        token = None
         try:
-            token = read_access_token()
+            token = read_token()
             stale_for = expired_seconds_ago()
             if stale_for is not None:
                 hours = stale_for / 3600
                 ago = f"{hours:.0f} hr" if hours >= 1 else f"{stale_for / 60:.0f} min"
                 raise UsageError(
-                    f"Sign-in expired {ago} ago. Right-click → Open Claude Code.",
+                    f"Sign-in expired {ago} ago. Right-click → Open Claude Code, "
+                    f"or set {ENV_TOKEN_VAR} to stop this recurring.",
                     retryable=False,
                     status=401,
                 )
-            snapshot = load_snapshot(token, self._config.get("user_agent"))
+            snapshot = load_snapshot(token.value, self._config.get("user_agent"))
         except CredentialError as exc:
             # Recoverable by signing in, so treat it like an auth failure.
             self.failed.emit(str(exc), "auth")
         except UsageError as exc:
             if exc.status in (401, 403):
                 kind = "auth"
+                if token is not None and token.is_long_lived:
+                    self.failed.emit(
+                        f"{ENV_TOKEN_VAR} was rejected. Regenerate it with "
+                        "`claude setup-token`.",
+                        kind,
+                    )
+                    return
             elif exc.status == 429:
                 kind = "throttle"
             elif exc.retryable:

@@ -29,7 +29,8 @@ itself stays dark; only the bars change colour.
 - Windows 11 (Windows 10 works too)
 - Python 3.10+
 - Claude Code installed and signed in — run `claude` once and `/login` if you
-  have not already
+  have not already. Optionally run `claude setup-token` too, so the widget does
+  not expire every few hours.
 
 ## Run it
 
@@ -125,12 +126,12 @@ Claude Code an OAuth token, Claude Code writes it to `.credentials.json`, and
 the widget reads that file. However you authenticated is invisible to the
 widget; all it ever sees is the resulting token.
 
-The one consequence: **Claude Code owns token refresh.** It renews the token
-whenever you use it, so under normal use the widget just keeps working. If you
-do not run Claude Code for long enough that the token expires, the widget says
-"Sign-in expired — open Claude Code to refresh it" and keeps checking every 5
-minutes; opening Claude Code clears it. The widget deliberately never writes to
-the credentials file, so it cannot disturb your Claude Code session.
+The one consequence: **Claude Code owns token refresh.** It renews the session
+token whenever you use it, so under normal use the widget keeps working. If you
+do not run Claude Code for long enough, that token expires and the widget says
+"Sign-in expired". Opening Claude Code clears it — or set
+`CLAUDE_CODE_OAUTH_TOKEN` once and the problem goes away for a year; see
+[Stop it expiring every few hours](#stop-it-expiring-every-few-hours).
 
 ### Two caveats worth knowing
 
@@ -192,6 +193,9 @@ you change something from the menu. Editable by hand (restart to apply):
 | `position` | `null` | Saved `[x, y]`; ignored if off-screen |
 | `user_agent` | `null` | Override; otherwise autodetected from the CLI |
 
+`CLAUDE_CODE_OAUTH_TOKEN` is read from the environment, not this file, so a
+long-lived token is never written to disk by the widget.
+
 A threshold only toasts once per window. When the window resets and usage drops
 back below it, the threshold re-arms.
 
@@ -201,7 +205,9 @@ back below it, the threshold re-arms.
 `/login`.
 
 **"Sign-in expired …"** or **"Token rejected"** — run `claude` once and the CLI
-refreshes the token in place. The widget checks the token's expiry before each
+refreshes the token in place, or right-click the panel and choose "Open Claude
+Code to refresh sign-in". To stop it recurring, set `CLAUDE_CODE_OAUTH_TOKEN`
+as described above. The widget checks the token's expiry before each
 request, so it reports this without spending a doomed call against the rate
 limit, and it keeps retrying at the normal 5-minute cadence rather than backing
 off.
@@ -226,14 +232,52 @@ Visual C++ runtime — install the
 or a DLL your antivirus quarantined, in which case check its history and
 reinstall PySide6.
 
+## Stop it expiring every few hours
+
+By default the widget reads the session token Claude Code writes at login. That
+token lasts about eight hours and is only renewed while the CLI is running, so
+if you do not open Claude Code the widget eventually shows "Sign-in expired".
+
+The fix is a long-lived token. `claude setup-token` issues one valid for roughly
+a year — Anthropic provides it for headless and CI use, which is what this
+widget effectively is:
+
+```
+claude setup-token
+```
+
+Copy the token it prints, then store it as a user environment variable:
+
+```
+setx CLAUDE_CODE_OAUTH_TOKEN "sk-ant-oat01-..."
+```
+
+Restart the widget (a new process is needed to inherit the variable) and it will
+stop expiring. `python -m claude_usage_widget.probe` reports which token is in
+use under `source:`.
+
+Requires a Pro or Max subscription, and usage still counts against your plan.
+Regenerate with the same command when it eventually expires.
+
+### Why not refresh the token automatically?
+
+The credentials file contains a refresh token, so the widget could renew the
+session token itself. It deliberately does not. Refresh tokens **rotate**: using
+one invalidates it, and Claude Code's stored copy goes stale. Two processes
+refreshing the same credentials is a known way to get
+[400s and be forced back to `/login`](https://github.com/anthropics/claude-code/issues/54443).
+A background widget silently logging you out of your CLI is a bad trade for
+saving one command, so the widget only ever reads.
+
 ## What it does with your credentials
 
 This widget reads your Claude Code OAuth token, so it is worth being precise
 about what happens to it.
 
-- It reads `%USERPROFILE%\.claude\.credentials.json` and sends the access token
-  to `https://api.anthropic.com/api/oauth/usage`. That is the only network
-  request the program ever makes.
+- It reads `CLAUDE_CODE_OAUTH_TOKEN` if set, otherwise
+  `%USERPROFILE%\.claude\.credentials.json`, and sends that token to
+  `https://api.anthropic.com/api/oauth/usage`. That is the only network request
+  the program ever makes.
 - It **never writes** to the credentials file. Token refresh belongs to Claude
   Code: refresh tokens rotate, so consuming one here could invalidate your CLI
   session. When the token expires the widget says so and waits.

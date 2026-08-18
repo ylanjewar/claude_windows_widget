@@ -16,10 +16,11 @@ import sys
 from datetime import datetime, timezone
 
 from .credentials import (
+    ENV_TOKEN_VAR,
     CredentialError,
     credentials_path,
     expired_seconds_ago,
-    read_access_token,
+    read_token,
     token_expiry_ms,
 )
 from .usage_api import (
@@ -74,12 +75,20 @@ def main() -> int:
             print(f"structure: unreadable ({exc})")
 
     try:
-        token = read_access_token()
+        token = read_token()
     except CredentialError as exc:
         print(f"\nerror: {exc}", file=sys.stderr)
         return 1
-    print(f"token:     ...{token[-6:]} (last 6 chars, length {len(token)})")
-    print(f"expiry:    {describe_expiry()}")
+    print(f"source:    {token.source}")
+    print(f"token:     ...{token.value[-6:]} (last 6 chars, length {len(token.value)})")
+    if token.is_long_lived:
+        print(f"expiry:    not tracked locally; {ENV_TOKEN_VAR} lasts about a year")
+    else:
+        print(f"expiry:    {describe_expiry()}")
+        print(
+            f"tip:       set {ENV_TOKEN_VAR} from `claude setup-token` so the "
+            "widget stops expiring every few hours"
+        )
 
     print("\n=== request ===")
     detected = detect_cli_version()
@@ -92,7 +101,7 @@ def main() -> int:
 
     print("\n=== response ===")
     try:
-        raw = fetch_usage(token)
+        raw = fetch_usage(token.value)
     except UsageError as exc:
         print(f"status:  HTTP {exc.status or '(no response)'}")
         print(f"message: {exc}")

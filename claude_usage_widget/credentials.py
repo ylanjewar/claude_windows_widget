@@ -1,7 +1,17 @@
-"""Locate and read the OAuth access token Claude Code stores on disk.
+"""Find the OAuth access token to authenticate usage requests with.
 
-On Windows and Linux the token lives in a plaintext JSON file; macOS uses the
-Keychain instead, which this module reports as unsupported rather than guessing.
+Two sources, in priority order:
+
+1. ``CLAUDE_CODE_OAUTH_TOKEN`` — a long-lived token from ``claude setup-token``,
+   valid for about a year. Anthropic provides it for headless and CI use, which
+   is effectively what this widget is, and it never goes stale between runs.
+2. ``.credentials.json`` — the session token Claude Code writes when you log in.
+   It lasts roughly eight hours and is only renewed while the CLI is running, so
+   the widget goes stale overnight if nothing else refreshes it.
+
+This module only ever *reads*. It never refreshes a token and never writes to
+the credentials file: refresh tokens rotate on use, so consuming one here would
+invalidate Claude Code's own stored copy and force the user to log in again.
 """
 
 from __future__ import annotations
@@ -11,7 +21,23 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
+
+ENV_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
+
+SOURCE_ENVIRONMENT = "environment"
+SOURCE_FILE = "credentials file"
+
+
+@dataclass(frozen=True)
+class Token:
+    value: str
+    source: str
+
+    @property
+    def is_long_lived(self) -> bool:
+        return self.source == SOURCE_ENVIRONMENT
 
 
 class CredentialError(Exception):
@@ -47,8 +73,20 @@ def _find_key(node: object, target: str) -> object | None:
     return None
 
 
+def read_token() -> Token:
+    """Return the token to use, preferring the long-lived one."""
+    from_env = os.environ.get(ENV_TOKEN_VAR, "").strip()
+    if from_env:
+        return Token(from_env, SOURCE_ENVIRONMENT)
+    return Token(_read_token_from_file(), SOURCE_FILE)
+
+
 def read_access_token() -> str:
     """Return the current OAuth access token, or raise CredentialError."""
+    return read_token().value
+
+
+def _read_token_from_file() -> str:
     path = credentials_path()
     if not path.exists():
         if sys.platform == "darwin":
@@ -57,7 +95,8 @@ def read_access_token() -> str:
                 "This widget targets Windows."
             )
         raise CredentialError(
-            f"No credentials at {path}. Run `claude` and sign in with /login."
+            f"No credentials at {path}. Run `claude` and sign in with /login, "
+            f"or set {ENV_TOKEN_VAR} from `claude setup-token`."
         )
 
     try:
@@ -122,6 +161,10 @@ def expired_seconds_ago() -> float | None:
     means the CLI simply has not run in a while. Checking first avoids spending
     a request — and rate-limit budget — on a call that is certain to 401.
     """
+    if os.environ.get(ENV_TOKEN_VAR, "").strip():
+        # A setup-token carries no local expiry, and is good for about a year.
+        # Nothing to pre-check; a rejection surfaces as a 401 instead.
+        return None
     expiry = token_expiry_ms()
     if expiry is None:
         return None

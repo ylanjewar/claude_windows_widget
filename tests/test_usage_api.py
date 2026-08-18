@@ -384,6 +384,75 @@ class CredentialTests(unittest.TestCase):
         self.assertIsNone(credentials.expired_seconds_ago())
 
 
+class LongLivedTokenTests(unittest.TestCase):
+    """CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token` lasts about a year.
+
+    The session token in the credentials file lasts hours and only renews while
+    Claude Code runs, so preferring the long-lived one is what stops the widget
+    going stale overnight.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self.dir = tempfile.mkdtemp(prefix="claude-longlived-")
+        self._previous = {
+            key: os.environ.get(key)
+            for key in ("CLAUDE_CONFIG_DIR", credentials.ENV_TOKEN_VAR)
+        }
+        os.environ["CLAUDE_CONFIG_DIR"] = self.dir
+        os.environ.pop(credentials.ENV_TOKEN_VAR, None)
+
+    def tearDown(self):
+        for key, value in self._previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _write_session_token(self, expires_at=None):
+        payload = {"claudeAiOauth": {"accessToken": "sk-ant-oat01-session"}}
+        if expires_at is not None:
+            payload["claudeAiOauth"]["expiresAt"] = expires_at
+        (Path(self.dir) / ".credentials.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+
+    def test_environment_token_takes_priority(self):
+        self._write_session_token()
+        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-longlived"
+        token = credentials.read_token()
+        self.assertEqual(token.value, "sk-ant-oat01-longlived")
+        self.assertTrue(token.is_long_lived)
+
+    def test_falls_back_to_the_credentials_file(self):
+        self._write_session_token()
+        token = credentials.read_token()
+        self.assertEqual(token.value, "sk-ant-oat01-session")
+        self.assertFalse(token.is_long_lived)
+
+    def test_blank_environment_variable_is_ignored(self):
+        self._write_session_token()
+        os.environ[credentials.ENV_TOKEN_VAR] = "   "
+        self.assertEqual(credentials.read_token().value, "sk-ant-oat01-session")
+
+    def test_environment_token_is_stripped(self):
+        os.environ[credentials.ENV_TOKEN_VAR] = "  sk-ant-oat01-padded\n"
+        self.assertEqual(credentials.read_token().value, "sk-ant-oat01-padded")
+
+    def test_environment_token_skips_the_expiry_pre_check(self):
+        """A long-lived token has no local expiry, so nothing to pre-check."""
+        self._write_session_token(expires_at=int((time.time() - 7200) * 1000))
+        self.assertIsNotNone(credentials.expired_seconds_ago())
+        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-longlived"
+        self.assertIsNone(credentials.expired_seconds_ago())
+
+    def test_environment_token_works_without_a_credentials_file(self):
+        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-longlived"
+        self.assertFalse((Path(self.dir) / ".credentials.json").exists())
+        self.assertEqual(credentials.read_token().value, "sk-ant-oat01-longlived")
+
+
 class PackagingTests(unittest.TestCase):
     """Guards on the build wiring. No Qt needed, so these always run."""
 
