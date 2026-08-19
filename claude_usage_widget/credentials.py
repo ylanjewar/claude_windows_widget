@@ -1,11 +1,14 @@
 """Find the OAuth access token to authenticate usage requests with.
 
-Two sources, in priority order:
+Three sources, in priority order:
 
-1. ``CLAUDE_CODE_OAUTH_TOKEN`` — a long-lived token from ``claude setup-token``,
-   valid for about a year. Anthropic provides it for headless and CI use, which
-   is effectively what this widget is, and it never goes stale between runs.
-2. ``.credentials.json`` — the session token Claude Code writes when you log in.
+1. ``CLAUDE_CODE_OAUTH_TOKEN`` in this process's environment — a long-lived
+   token from ``claude setup-token``, valid for about a year. Anthropic provides
+   it for headless and CI use, which is effectively what this widget is.
+2. The same variable read from ``HKCU\\Environment``, where ``setx`` persists
+   it. Running processes never receive the update, so without this a freshly set
+   token would appear not to work until the widget was restarted.
+3. ``.credentials.json`` — the session token Claude Code writes when you log in.
    It lasts roughly eight hours and is only renewed while the CLI is running, so
    the widget goes stale overnight if nothing else refreshes it.
 
@@ -27,7 +30,10 @@ from pathlib import Path
 ENV_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
 
 SOURCE_ENVIRONMENT = "environment"
+SOURCE_REGISTRY = "user environment (registry)"
 SOURCE_FILE = "credentials file"
+
+LONG_LIVED_SOURCES = (SOURCE_ENVIRONMENT, SOURCE_REGISTRY)
 
 
 @dataclass(frozen=True)
@@ -37,7 +43,7 @@ class Token:
 
     @property
     def is_long_lived(self) -> bool:
-        return self.source == SOURCE_ENVIRONMENT
+        return self.source in LONG_LIVED_SOURCES
 
 
 class CredentialError(Exception):
@@ -73,12 +79,43 @@ def _find_key(node: object, target: str) -> object | None:
     return None
 
 
-def read_token() -> Token:
-    """Return the token to use, preferring the long-lived one."""
+def _token_from_registry() -> str | None:
+    """Read the persisted user environment variable straight from the registry.
+
+    ``setx`` writes to ``HKCU\\Environment`` and broadcasts a change, but no
+    already-running process ever picks it up — not the console it was typed in,
+    and not this widget if it started first. Reading the registry means setx
+    takes effect on the next poll instead of requiring a restart, and a widget
+    launched at login sees a token set afterwards.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover - Windows only
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            value, _ = winreg.QueryValueEx(key, ENV_TOKEN_VAR)
+    except OSError:
+        return None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def long_lived_token() -> Token | None:
+    """The setup-token, from this process's environment or the registry."""
     from_env = os.environ.get(ENV_TOKEN_VAR, "").strip()
     if from_env:
         return Token(from_env, SOURCE_ENVIRONMENT)
-    return Token(_read_token_from_file(), SOURCE_FILE)
+    persisted = _token_from_registry()
+    if persisted:
+        return Token(persisted, SOURCE_REGISTRY)
+    return None
+
+
+def read_token() -> Token:
+    """Return the token to use, preferring the long-lived one."""
+    return long_lived_token() or Token(_read_token_from_file(), SOURCE_FILE)
 
 
 def read_access_token() -> str:
@@ -161,7 +198,7 @@ def expired_seconds_ago() -> float | None:
     means the CLI simply has not run in a while. Checking first avoids spending
     a request — and rate-limit budget — on a call that is certain to 401.
     """
-    if os.environ.get(ENV_TOKEN_VAR, "").strip():
+    if long_lived_token() is not None:
         # A setup-token carries no local expiry, and is good for about a year.
         # Nothing to pre-check; a rejection surfaces as a 401 instead.
         return None

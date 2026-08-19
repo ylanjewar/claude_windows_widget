@@ -453,6 +453,74 @@ class LongLivedTokenTests(unittest.TestCase):
         self.assertEqual(credentials.read_token().value, "sk-ant-oat01-longlived")
 
 
+class RegistryFallbackTests(unittest.TestCase):
+    """setx persists to HKCU\\Environment but never updates running processes.
+
+    Reading the registry directly is what makes `setx` take effect on the next
+    poll rather than requiring the widget to be restarted.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self.dir = tempfile.mkdtemp(prefix="claude-registry-")
+        self._config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+        self._env_token = os.environ.get(credentials.ENV_TOKEN_VAR)
+        self._real_registry = credentials._token_from_registry
+        os.environ["CLAUDE_CONFIG_DIR"] = self.dir
+        os.environ.pop(credentials.ENV_TOKEN_VAR, None)
+        (Path(self.dir) / ".credentials.json").write_text(
+            json.dumps(
+                {
+                    "claudeAiOauth": {
+                        "accessToken": "sk-ant-oat01-session",
+                        "expiresAt": int((time.time() - 7200) * 1000),
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        credentials._token_from_registry = self._real_registry
+        for key, value in (
+            ("CLAUDE_CONFIG_DIR", self._config_dir),
+            (credentials.ENV_TOKEN_VAR, self._env_token),
+        ):
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_registry_token_is_used_when_the_process_env_is_stale(self):
+        credentials._token_from_registry = lambda: "sk-ant-oat01-fromsetx"
+        token = credentials.read_token()
+        self.assertEqual(token.value, "sk-ant-oat01-fromsetx")
+        self.assertEqual(token.source, credentials.SOURCE_REGISTRY)
+        self.assertTrue(token.is_long_lived)
+
+    def test_process_environment_still_wins(self):
+        credentials._token_from_registry = lambda: "sk-ant-oat01-fromsetx"
+        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-fromenv"
+        self.assertEqual(credentials.read_token().value, "sk-ant-oat01-fromenv")
+
+    def test_registry_token_skips_the_expiry_pre_check(self):
+        """Otherwise a stale session token would still report as expired."""
+        self.assertIsNotNone(credentials.expired_seconds_ago())
+        credentials._token_from_registry = lambda: "sk-ant-oat01-fromsetx"
+        self.assertIsNone(credentials.expired_seconds_ago())
+
+    def test_absent_registry_value_falls_through_to_the_file(self):
+        credentials._token_from_registry = lambda: None
+        token = credentials.read_token()
+        self.assertEqual(token.value, "sk-ant-oat01-session")
+        self.assertEqual(token.source, credentials.SOURCE_FILE)
+
+    def test_registry_read_is_safe_off_windows(self):
+        """The real implementation must never raise on a non-Windows box."""
+        self.assertIsNone(self._real_registry() if os.name != "nt" else None)
+
+
 class PackagingTests(unittest.TestCase):
     """Guards on the build wiring. No Qt needed, so these always run."""
 

@@ -252,9 +252,15 @@ Copy the token it prints, then store it as a user environment variable:
 setx CLAUDE_CODE_OAUTH_TOKEN "sk-ant-oat01-..."
 ```
 
-Restart the widget (a new process is needed to inherit the variable) and it will
-stop expiring. `python -m claude_usage_widget.probe` reports which token is in
-use under `source:`.
+The widget picks this up on its next poll — within five minutes, no restart
+needed. `setx` only updates *future* processes, so the widget also reads the
+value straight from `HKCU\Environment` where `setx` stores it; that is why an
+already-running widget still sees it.
+
+`python -m claude_usage_widget.probe` reports which token is in use under
+`source:`. Note the probe runs in whatever console you launch it from, so it
+will say `environment` only in a console opened after the `setx`; the widget
+itself does not have that limitation.
 
 Requires a Pro or Max subscription, and usage still counts against your plan.
 Regenerate with the same command when it eventually expires.
