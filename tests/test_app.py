@@ -325,6 +325,51 @@ class WidgetAppTests(unittest.TestCase):
             self.app.config.set("auto_refresh_sign_in", True)
         self.assertEqual(called["n"], 0)
 
+    def test_session_fallback_also_refreshes_an_expired_token(self):
+        """Reaching the fallback with an expired session token must still recover.
+
+        A scope rejection routes here, and this path previously skipped the
+        refresh entirely — so setting CLAUDE_CODE_OAUTH_TOKEN turned a
+        recoverable expiry into a dead end.
+        """
+        from claude_usage_widget import app as app_module, startup
+        from claude_usage_widget.credentials import SOURCE_FILE, Token
+        import claude_usage_widget.credentials as creds
+
+        poller = app_module.Poller(self.app.config)
+        expired = [True]
+        refreshed = {"n": 0}
+
+        def fake_refresh(timeout=120):
+            refreshed["n"] += 1
+            expired[0] = False
+            return True
+
+        original = (
+            startup.refresh_sign_in,
+            app_module.expired_seconds_ago,
+            app_module.load_snapshot,
+            creds.session_token,
+        )
+        startup.refresh_sign_in = fake_refresh
+        app_module.expired_seconds_ago = lambda: 3600.0 if expired[0] else None
+        app_module.load_snapshot = lambda value, ua=None: self._snapshot(7)
+        creds.session_token = lambda: Token("sk-session", SOURCE_FILE)
+        try:
+            results = []
+            poller.succeeded.connect(lambda snap: results.append(snap))
+            poller._run_with_session_token()
+        finally:
+            (
+                startup.refresh_sign_in,
+                app_module.expired_seconds_ago,
+                app_module.load_snapshot,
+                creds.session_token,
+            ) = original
+
+        self.assertEqual(refreshed["n"], 1, "fallback must attempt a refresh")
+        self.assertEqual(len(results), 1)
+
     # -- packaging ------------------------------------------------------------
 
     def test_entry_point_runs_without_a_parent_package(self):

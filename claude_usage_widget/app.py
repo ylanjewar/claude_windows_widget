@@ -137,10 +137,18 @@ class Poller(QObject):
             return False
 
     def _run_with_session_token(self) -> None:
-        """Retry immediately using the credentials file token."""
+        """Retry immediately using the credentials file token.
+
+        The session token is the one that expires, so this path needs the same
+        refresh attempt as the main one. Without it, anyone who had set
+        CLAUDE_CODE_OAUTH_TOKEN reached here with an expired session token and
+        no way to recover.
+        """
         try:
             from .credentials import session_token
 
+            if expired_seconds_ago() is not None:
+                self._try_cli_refresh()
             snapshot = load_snapshot(
                 session_token().value, self._config.get("user_agent")
             )
