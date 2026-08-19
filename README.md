@@ -66,6 +66,11 @@ terminal is ever involved and there is nothing packaged for antivirus to flag.
 .\build.ps1 -Trim      # smaller bundle, drops unused Qt modules
 ```
 
+`build.ps1` stops any running `ClaudeUsageWidget.exe` and clears `dist\` and
+`build\` itself, so you do not need to delete them by hand. Windows locks the
+DLLs a running process has loaded, which is why deleting `dist\` while the
+widget is open fails with "Access is denied" on every file.
+
 `-Trim` roughly halves the bundle by excluding Qt modules this code never
 imports. It is off by default because excluding a module can also drop a DLL
 that QtGui or QtWidgets links against, and the resulting executable fails at
@@ -226,6 +231,10 @@ off.
 
 **"Rate limited"** — the widget is already backing off. It will recover on its
 own; the bars keep showing the last good values meanwhile.
+
+**"Access is denied" deleting `dist\`** — the widget is still running and
+Windows locks its loaded DLLs. Quit it from the tray icon, or
+`taskkill /IM ClaudeUsageWidget.exe /F`. `build.ps1` now does this for you.
 
 **Rows look wrong or are missing** — run the probe command above.
 

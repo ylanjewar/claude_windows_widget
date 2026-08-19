@@ -39,6 +39,30 @@ function Invoke-Step {
     }
 }
 
+# Windows locks the DLLs of a running process, so a previous build still running
+# makes both the rebuild and any manual `rmdir /s /q dist` fail with "Access is
+# denied" on every file it has loaded. Stop it first.
+$running = Get-Process -Name "ClaudeUsageWidget" -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Host "Stopping $($running.Count) running instance(s)..." -ForegroundColor Yellow
+    $running | Stop-Process -Force
+    # Handles are released asynchronously; give the loader a moment.
+    Start-Sleep -Milliseconds 800
+}
+
+foreach ($stale in @("dist", "build")) {
+    $path = Join-Path $root $stale
+    if (Test-Path $path) {
+        try {
+            Remove-Item -Recurse -Force $path -ErrorAction Stop
+        } catch {
+            throw ("Could not remove $stale : $($_.Exception.Message)`n" +
+                   "Something is still using it. Close the widget (tray icon -> " +
+                   "Quit) or run: taskkill /IM ClaudeUsageWidget.exe /F")
+        }
+    }
+}
+
 $venv = Join-Path $root ".venv"
 if (-not (Test-Path $venv)) {
     Write-Host "Creating virtual environment..." -ForegroundColor Cyan
