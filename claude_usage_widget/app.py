@@ -55,9 +55,11 @@ class Poller(QObject):
             if stale_for is not None:
                 hours = stale_for / 3600
                 ago = f"{hours:.0f} hr" if hours >= 1 else f"{stale_for / 60:.0f} min"
+                # Naming what was checked turns "why is it still expired?"
+                # into a fact the user can act on without running the probe.
                 raise UsageError(
-                    f"Sign-in expired {ago} ago. Right-click → Open Claude Code, "
-                    f"or set {ENV_TOKEN_VAR} to stop this recurring.",
+                    f"Sign-in expired {ago} ago, and no {ENV_TOKEN_VAR} found "
+                    "in the environment or registry. Right-click → Open Claude Code.",
                     retryable=False,
                     status=401,
                 )
