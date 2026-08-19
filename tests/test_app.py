@@ -248,6 +248,83 @@ class WidgetAppTests(unittest.TestCase):
         self.assertTrue(poller._long_lived_refused, "should not retry it every poll")
         self.assertEqual(len(results), 1, "the retry's snapshot should be delivered")
 
+    # -- automatic sign-in refresh --------------------------------------------
+
+    def test_expired_session_triggers_a_cli_refresh(self):
+        """Claude Code owns the refresh token, so let it do the renewing."""
+        from claude_usage_widget import app as app_module, startup
+        from claude_usage_widget.credentials import SOURCE_FILE, Token
+
+        poller = app_module.Poller(self.app.config)
+        calls = {"refresh": 0}
+        expired = [True]
+
+        def fake_refresh(timeout=120):
+            calls["refresh"] += 1
+            expired[0] = False  # the CLI renewed it
+            return True
+
+        original = (
+            startup.refresh_sign_in,
+            app_module.expired_seconds_ago,
+            app_module.read_token,
+            app_module.load_snapshot,
+        )
+        startup.refresh_sign_in = fake_refresh
+        app_module.expired_seconds_ago = lambda: 3600.0 if expired[0] else None
+        app_module.read_token = lambda allow_long_lived=True: Token("tok", SOURCE_FILE)
+        app_module.load_snapshot = lambda value, ua=None: self._snapshot(9)
+        try:
+            results = []
+            poller.succeeded.connect(lambda snap: results.append(snap))
+            poller._run()
+        finally:
+            (
+                startup.refresh_sign_in,
+                app_module.expired_seconds_ago,
+                app_module.read_token,
+                app_module.load_snapshot,
+            ) = original
+
+        self.assertEqual(calls["refresh"], 1)
+        self.assertEqual(len(results), 1, "should recover without user action")
+
+    def test_cli_refresh_is_rate_limited(self):
+        """One attempt per 10 minutes, so a broken CLI is not invoked each poll."""
+        from claude_usage_widget import app as app_module, startup
+
+        poller = app_module.Poller(self.app.config)
+        calls = {"n": 0}
+
+        def counting(timeout=120):
+            calls["n"] += 1
+            return False
+
+        original = startup.refresh_sign_in
+        startup.refresh_sign_in = counting
+        try:
+            self.assertTrue(poller._try_cli_refresh() is False)
+            poller._try_cli_refresh()
+            poller._try_cli_refresh()
+        finally:
+            startup.refresh_sign_in = original
+        self.assertEqual(calls["n"], 1, "later attempts should be suppressed")
+
+    def test_auto_refresh_can_be_disabled(self):
+        from claude_usage_widget import app as app_module, startup
+
+        self.app.config.set("auto_refresh_sign_in", False)
+        poller = app_module.Poller(self.app.config)
+        called = {"n": 0}
+        original = startup.refresh_sign_in
+        startup.refresh_sign_in = lambda timeout=120: called.__setitem__("n", 1) or True
+        try:
+            self.assertFalse(poller._try_cli_refresh())
+        finally:
+            startup.refresh_sign_in = original
+            self.app.config.set("auto_refresh_sign_in", True)
+        self.assertEqual(called["n"], 0)
+
     # -- packaging ------------------------------------------------------------
 
     def test_entry_point_runs_without_a_parent_package(self):

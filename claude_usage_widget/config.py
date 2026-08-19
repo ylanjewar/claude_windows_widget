@@ -20,6 +20,9 @@ DEFAULTS: dict[str, Any] = {
     # Toast notification thresholds, in percent.
     "notify_at": [70, 80],
     "notifications_enabled": True,
+    # Run `claude update` to let the CLI renew an expired sign-in, rather than
+    # asking the user to open Claude Code themselves.
+    "auto_refresh_sign_in": True,
     "opacity": 0.96,
     # Saved window position as [x, y]; None means "centre-right of the screen".
     "position": None,

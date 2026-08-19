@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .usage_api import cli_candidates
+
 SHORTCUT_NAME = "Claude Usage Widget.lnk"
 
 
@@ -54,8 +56,6 @@ def open_claude_cli() -> tuple[bool, str]:
     if os.name != "nt":
         return False, "Only supported on Windows."
 
-    from .usage_api import cli_candidates
-
     candidates = cli_candidates()
     if not candidates:
         return False, (
@@ -67,6 +67,46 @@ def open_claude_cli() -> tuple[bool, str]:
     except (OSError, subprocess.SubprocessError) as exc:
         return False, f"Could not launch Claude Code: {exc}"
     return True, ""
+
+
+def refresh_sign_in(timeout: int = 120) -> bool:
+    """Ask Claude Code to renew its own token, and report whether it did.
+
+    Running the official CLI is the safe way to refresh: it owns the refresh
+    token, so rotation stays consistent and the widget never writes credentials
+    itself. `claude update` starts the CLI far enough to renew an expired access
+    token without opening an interactive session or spending any usage.
+
+    Success is confirmed by re-reading the stored expiry rather than trusting
+    the exit code, since the command succeeds for reasons unrelated to auth.
+    """
+    from .credentials import token_expiry_ms
+
+    candidates = cli_candidates()
+    if not candidates:
+        return False
+
+    before = token_expiry_ms()
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    executable = candidates[0]
+    use_shell = os.name == "nt" and executable.lower().endswith((".cmd", ".bat", ".ps1"))
+    command = f'"{executable}" update' if use_shell else [executable, "update"]
+    try:
+        subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=flags,
+            shell=use_shell,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+    after = token_expiry_ms()
+    if after is None:
+        return False
+    return before is None or after > before
 
 
 def _icon_path() -> str:

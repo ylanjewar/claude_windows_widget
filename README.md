@@ -205,6 +205,7 @@ you change something from the menu. Editable by hand (restart to apply):
 | `critical_percent` | `85` | Bar turns red at or above this |
 | `notify_at` | `[70, 80]` | Toast thresholds |
 | `notifications_enabled` | `true` | Master switch for toasts |
+| `auto_refresh_sign_in` | `true` | Run `claude update` to renew an expired sign-in |
 | `opacity` | `0.96` | Window opacity |
 | `position` | `null` | Saved `[x, y]`; ignored if off-screen |
 | `user_agent` | `null` | Override; otherwise autodetected from the CLI |
@@ -261,7 +262,19 @@ Claude Code the widget eventually shows "Sign-in expired". Opening Claude Code
 refreshes it, and the widget's right-click menu offers **Open Claude Code to
 refresh sign-in** when that is the problem.
 
-**There is currently no way around this.** The obvious candidate does not work:
+**The widget handles this for you.** When the session token has expired it runs
+`claude update`, which starts the CLI far enough to renew the token and write it
+back, then retries — no user action, no interactive session, no usage spent. The
+CLI owns the refresh token and its rotation, so delegating keeps the widget out
+of the credential-writing business entirely. It attempts this at most once every
+ten minutes, and `auto_refresh_sign_in: false` in the config turns it off.
+
+This only works while the *refresh* token is valid, which is roughly three
+weeks. Past that, Claude Code needs a real `/login` and the widget says so.
+
+### What does not work: a long-lived token
+
+The obvious candidate is `claude setup-token`, and it does not work here:
 
 ```
 claude setup-token          # issues a token valid for about a year
@@ -274,10 +287,11 @@ HTTP 403
 "OAuth token does not meet scope requirement user:profile"
 ```
 
-`setup-token` grants a narrower scope set than an interactive login, and this
-endpoint requires `user:profile`. If you set `CLAUDE_CODE_OAUTH_TOKEN` anyway,
-the widget tries it once, notices the scope rejection, and silently falls back
-to the session token — so it costs nothing, but it does not help either.
+The [documentation](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token)
+confirms why: a setup-token "can only make model requests". This endpoint is not
+a model request and requires `user:profile`, which the token does not carry. If
+you set `CLAUDE_CODE_OAUTH_TOKEN` anyway, the widget tries it once, notices the
+scope rejection, and falls back to the session token — harmless, but no help.
 
 ### Why not refresh the session token automatically?
 

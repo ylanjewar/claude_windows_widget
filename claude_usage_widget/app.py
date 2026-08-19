@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 
 from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup
@@ -44,6 +45,10 @@ class Poller(QObject):
         # Set once the endpoint refuses the long-lived token over scopes, so we
         # stop spending a request on it every poll.
         self._long_lived_refused = False
+        # None means never attempted. A 0.0 sentinel would compare against a
+        # monotonic clock that starts near zero, suppressing the first attempt
+        # on a freshly booted machine.
+        self._refresh_attempted_at: float | None = None
 
     def start_fetch(self) -> bool:
         with self._lock:
@@ -58,6 +63,10 @@ class Poller(QObject):
         try:
             token = read_token(allow_long_lived=not self._long_lived_refused)
             stale_for = expired_seconds_ago() if not token.is_long_lived else None
+            if stale_for is not None and self._try_cli_refresh():
+                # Claude Code renewed it; re-read and carry on as normal.
+                token = read_token(allow_long_lived=not self._long_lived_refused)
+                stale_for = expired_seconds_ago()
             if stale_for is not None:
                 hours = stale_for / 3600
                 ago = f"{hours:.0f} hr" if hours >= 1 else f"{stale_for / 60:.0f} min"
@@ -107,6 +116,25 @@ class Poller(QObject):
         finally:
             with self._lock:
                 self._busy = False
+
+    def _try_cli_refresh(self) -> bool:
+        """Have Claude Code renew the token, at most once every 10 minutes.
+
+        The CLI owns the refresh token and handles its rotation, so delegating
+        keeps the widget out of the credential-writing business entirely.
+        """
+        if not self._config.get("auto_refresh_sign_in", True):
+            return False
+        now = time.monotonic()
+        if self._refresh_attempted_at is not None and now - self._refresh_attempted_at < 600:
+            return False
+        self._refresh_attempted_at = now
+        try:
+            from . import startup
+
+            return startup.refresh_sign_in()
+        except Exception:  # noqa: BLE001 - a failed refresh is not fatal
+            return False
 
     def _run_with_session_token(self) -> None:
         """Retry immediately using the credentials file token."""
