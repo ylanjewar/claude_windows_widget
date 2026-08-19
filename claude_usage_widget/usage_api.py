@@ -165,6 +165,17 @@ def fetch_usage(token: str, ua_override: str | None = None) -> dict[str, Any]:
         except Exception:
             pass
         if exc.code in (401, 403):
+            # A token can be perfectly valid and still be refused for lacking a
+            # scope. `claude setup-token` issues one without user:profile, which
+            # this endpoint requires, so that is a different problem from an
+            # expired sign-in and needs different handling.
+            if "scope" in body.lower():
+                raise UsageError(
+                    "Token lacks a scope this endpoint requires.",
+                    retryable=False,
+                    status=exc.code,
+                    body=body,
+                ) from exc
             raise UsageError(
                 "Token rejected. Run `claude` and sign in again with /login.",
                 retryable=False,

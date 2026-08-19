@@ -420,9 +420,9 @@ class LongLivedTokenTests(unittest.TestCase):
 
     def test_environment_token_takes_priority(self):
         self._write_session_token()
-        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-longlived"
+        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-longlivedxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         token = credentials.read_token()
-        self.assertEqual(token.value, "sk-ant-oat01-longlived")
+        self.assertEqual(token.value, "sk-ant-oat01-longlivedxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
         self.assertTrue(token.is_long_lived)
 
     def test_falls_back_to_the_credentials_file(self):
@@ -437,20 +437,77 @@ class LongLivedTokenTests(unittest.TestCase):
         self.assertEqual(credentials.read_token().value, "sk-ant-oat01-session")
 
     def test_environment_token_is_stripped(self):
-        os.environ[credentials.ENV_TOKEN_VAR] = "  sk-ant-oat01-padded\n"
-        self.assertEqual(credentials.read_token().value, "sk-ant-oat01-padded")
+        os.environ[credentials.ENV_TOKEN_VAR] = "  sk-ant-oat01-paddedxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"
+        self.assertEqual(credentials.read_token().value, "sk-ant-oat01-paddedxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
 
     def test_environment_token_skips_the_expiry_pre_check(self):
         """A long-lived token has no local expiry, so nothing to pre-check."""
         self._write_session_token(expires_at=int((time.time() - 7200) * 1000))
         self.assertIsNotNone(credentials.expired_seconds_ago())
-        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-longlived"
+        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-longlivedxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         self.assertIsNone(credentials.expired_seconds_ago())
 
     def test_environment_token_works_without_a_credentials_file(self):
-        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-longlived"
+        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-longlivedxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         self.assertFalse((Path(self.dir) / ".credentials.json").exists())
-        self.assertEqual(credentials.read_token().value, "sk-ant-oat01-longlived")
+        self.assertEqual(credentials.read_token().value, "sk-ant-oat01-longlivedxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+
+
+class TokenValidationTests(unittest.TestCase):
+    """A truncated token must be named as such, not left to look like expiry."""
+
+    def setUp(self):
+        self._previous = os.environ.get(credentials.ENV_TOKEN_VAR)
+
+    def tearDown(self):
+        if self._previous is None:
+            os.environ.pop(credentials.ENV_TOKEN_VAR, None)
+        else:
+            os.environ[credentials.ENV_TOKEN_VAR] = self._previous
+
+    def test_short_token_is_rejected_with_its_length(self):
+        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-eO9gPILW"
+        with self.assertRaises(credentials.CredentialError) as caught:
+            credentials.read_token()
+        self.assertIn("truncated", str(caught.exception))
+        self.assertIn("21", str(caught.exception))
+
+    def test_full_length_token_is_accepted(self):
+        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-" + "x" * 95
+        self.assertTrue(credentials.read_token().is_long_lived)
+
+    def test_malformed_token_does_not_masquerade_as_expiry(self):
+        """expired_seconds_ago must stay quiet so one error is reported, not two."""
+        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-short"
+        self.assertIsNone(credentials.expired_seconds_ago())
+
+
+class TokenExtractionTests(unittest.TestCase):
+    """set_token recovers a token from however the terminal mangled the paste."""
+
+    FULL = "sk-ant-oat01-" + "A" * 95
+
+    def test_plain_paste(self):
+        from claude_usage_widget.set_token import extract
+
+        self.assertEqual(extract(self.FULL), self.FULL)
+
+    def test_paste_wrapped_across_lines(self):
+        """A wrapped terminal line is the likeliest way a token gets mangled."""
+        from claude_usage_widget.set_token import extract
+
+        wrapped = "\n".join([self.FULL[:40], self.FULL[40:80], self.FULL[80:]])
+        self.assertEqual(extract(wrapped), self.FULL)
+
+    def test_surrounding_text_is_ignored(self):
+        from claude_usage_widget.set_token import extract
+
+        self.assertEqual(extract(f"token: {self.FULL} (keep secret)"), self.FULL)
+
+    def test_non_token_input_returns_none(self):
+        from claude_usage_widget.set_token import extract
+
+        self.assertIsNone(extract("hello world"))
 
 
 class RegistryFallbackTests(unittest.TestCase):
@@ -493,21 +550,21 @@ class RegistryFallbackTests(unittest.TestCase):
                 os.environ[key] = value
 
     def test_registry_token_is_used_when_the_process_env_is_stale(self):
-        credentials._token_from_registry = lambda: "sk-ant-oat01-fromsetx"
+        credentials._token_from_registry = lambda: "sk-ant-oat01-fromsetxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         token = credentials.read_token()
-        self.assertEqual(token.value, "sk-ant-oat01-fromsetx")
+        self.assertEqual(token.value, "sk-ant-oat01-fromsetxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
         self.assertEqual(token.source, credentials.SOURCE_REGISTRY)
         self.assertTrue(token.is_long_lived)
 
     def test_process_environment_still_wins(self):
-        credentials._token_from_registry = lambda: "sk-ant-oat01-fromsetx"
-        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-fromenv"
-        self.assertEqual(credentials.read_token().value, "sk-ant-oat01-fromenv")
+        credentials._token_from_registry = lambda: "sk-ant-oat01-fromsetxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        os.environ[credentials.ENV_TOKEN_VAR] = "sk-ant-oat01-fromenvxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        self.assertEqual(credentials.read_token().value, "sk-ant-oat01-fromenvxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
 
     def test_registry_token_skips_the_expiry_pre_check(self):
         """Otherwise a stale session token would still report as expired."""
         self.assertIsNotNone(credentials.expired_seconds_ago())
-        credentials._token_from_registry = lambda: "sk-ant-oat01-fromsetx"
+        credentials._token_from_registry = lambda: "sk-ant-oat01-fromsetxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         self.assertIsNone(credentials.expired_seconds_ago())
 
     def test_absent_registry_value_falls_through_to_the_file(self):

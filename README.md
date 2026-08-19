@@ -29,8 +29,7 @@ itself stays dark; only the bars change colour.
 - Windows 11 (Windows 10 works too)
 - Python 3.10+
 - Claude Code installed and signed in — run `claude` once and `/login` if you
-  have not already. Optionally run `claude setup-token` too, so the widget does
-  not expire every few hours.
+  have not already.
 
 ## Run it
 
@@ -146,9 +145,9 @@ widget; all it ever sees is the resulting token.
 The one consequence: **Claude Code owns token refresh.** It renews the session
 token whenever you use it, so under normal use the widget keeps working. If you
 do not run Claude Code for long enough, that token expires and the widget says
-"Sign-in expired". Opening Claude Code clears it — or set
-`CLAUDE_CODE_OAUTH_TOKEN` once and the problem goes away for a year; see
-[Stop it expiring every few hours](#stop-it-expiring-every-few-hours).
+"Sign-in expired". Opening Claude Code clears it; see
+[The sign-in expires every few hours](#the-sign-in-expires-every-few-hours) for
+why there is no permanent fix.
 
 ### Two caveats worth knowing
 
@@ -223,8 +222,9 @@ back below it, the threshold re-arms.
 
 **"Sign-in expired …"** or **"Token rejected"** — run `claude` once and the CLI
 refreshes the token in place, or right-click the panel and choose "Open Claude
-Code to refresh sign-in". To stop it recurring, set `CLAUDE_CODE_OAUTH_TOKEN`
-as described above. The widget checks the token's expiry before each
+Code to refresh sign-in". See
+[The sign-in expires every few hours](#the-sign-in-expires-every-few-hours) for
+why there is no permanent fix. The widget checks the token's expiry before each
 request, so it reports this without spending a doomed call against the rate
 limit, and it keeps retrying at the normal 5-minute cadence rather than backing
 off.
@@ -253,40 +253,33 @@ Visual C++ runtime — install the
 or a DLL your antivirus quarantined, in which case check its history and
 reinstall PySide6.
 
-## Stop it expiring every few hours
+## The sign-in expires every few hours
 
-By default the widget reads the session token Claude Code writes at login. That
-token lasts about eight hours and is only renewed while the CLI is running, so
-if you do not open Claude Code the widget eventually shows "Sign-in expired".
+The widget reads the session token Claude Code writes at login. It lasts about
+eight hours and is only renewed while the CLI is running, so if you do not open
+Claude Code the widget eventually shows "Sign-in expired". Opening Claude Code
+refreshes it, and the widget's right-click menu offers **Open Claude Code to
+refresh sign-in** when that is the problem.
 
-The fix is a long-lived token. `claude setup-token` issues one valid for roughly
-a year — Anthropic provides it for headless and CI use, which is what this
-widget effectively is:
-
-```
-claude setup-token
-```
-
-Copy the token it prints, then store it as a user environment variable:
+**There is currently no way around this.** The obvious candidate does not work:
 
 ```
-setx CLAUDE_CODE_OAUTH_TOKEN "sk-ant-oat01-..."
+claude setup-token          # issues a token valid for about a year
 ```
 
-The widget picks this up on its next poll — within five minutes, no restart
-needed. `setx` only updates *future* processes, so the widget also reads the
-value straight from `HKCU\Environment` where `setx` stores it; that is why an
-already-running widget still sees it.
+That token is real and long-lived, but the usage endpoint refuses it:
 
-`python -m claude_usage_widget.probe` reports which token is in use under
-`source:`. Note the probe runs in whatever console you launch it from, so it
-will say `environment` only in a console opened after the `setx`; the widget
-itself does not have that limitation.
+```
+HTTP 403
+"OAuth token does not meet scope requirement user:profile"
+```
 
-Requires a Pro or Max subscription, and usage still counts against your plan.
-Regenerate with the same command when it eventually expires.
+`setup-token` grants a narrower scope set than an interactive login, and this
+endpoint requires `user:profile`. If you set `CLAUDE_CODE_OAUTH_TOKEN` anyway,
+the widget tries it once, notices the scope rejection, and silently falls back
+to the session token — so it costs nothing, but it does not help either.
 
-### Why not refresh the token automatically?
+### Why not refresh the session token automatically?
 
 The credentials file contains a refresh token, so the widget could renew the
 session token itself. It deliberately does not. Refresh tokens **rotate**: using
@@ -294,7 +287,7 @@ one invalidates it, and Claude Code's stored copy goes stale. Two processes
 refreshing the same credentials is a known way to get
 [400s and be forced back to `/login`](https://github.com/anthropics/claude-code/issues/54443).
 A background widget silently logging you out of your CLI is a bad trade for
-saving one command, so the widget only ever reads.
+avoiding a periodic message, so the widget only ever reads.
 
 ## What it does with your credentials
 

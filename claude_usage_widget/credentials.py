@@ -35,6 +35,12 @@ SOURCE_FILE = "credentials file"
 
 LONG_LIVED_SOURCES = (SOURCE_ENVIRONMENT, SOURCE_REGISTRY)
 
+# Real tokens run to roughly 100 characters. Anything much shorter has been
+# truncated in transit — a partial copy out of a wrapped terminal line, say —
+# and sending it produces a 401 that looks like an expiry problem instead of
+# the configuration problem it is.
+MIN_PLAUSIBLE_TOKEN_LENGTH = 40
+
 
 @dataclass(frozen=True)
 class Token:
@@ -102,20 +108,48 @@ def _token_from_registry() -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _validate_long_lived(value: str, source: str) -> Token:
+    if len(value) < MIN_PLAUSIBLE_TOKEN_LENGTH:
+        raise CredentialError(
+            f"{ENV_TOKEN_VAR} looks truncated — {len(value)} characters, "
+            "expected about 100. Re-run `claude setup-token` and store the "
+            "whole value: python -m claude_usage_widget.set_token"
+        )
+    return Token(value, source)
+
+
 def long_lived_token() -> Token | None:
-    """The setup-token, from this process's environment or the registry."""
+    """The setup-token, from this process's environment or the registry.
+
+    A malformed value raises rather than falling through to the credentials
+    file: the user set the variable deliberately, so silently ignoring it would
+    hide the mistake behind an unrelated expiry message.
+    """
     from_env = os.environ.get(ENV_TOKEN_VAR, "").strip()
     if from_env:
-        return Token(from_env, SOURCE_ENVIRONMENT)
+        return _validate_long_lived(from_env, SOURCE_ENVIRONMENT)
     persisted = _token_from_registry()
     if persisted:
-        return Token(persisted, SOURCE_REGISTRY)
+        return _validate_long_lived(persisted, SOURCE_REGISTRY)
     return None
 
 
-def read_token() -> Token:
-    """Return the token to use, preferring the long-lived one."""
-    return long_lived_token() or Token(_read_token_from_file(), SOURCE_FILE)
+def session_token() -> Token:
+    """The Claude Code session token, ignoring any long-lived one."""
+    return Token(_read_token_from_file(), SOURCE_FILE)
+
+
+def read_token(allow_long_lived: bool = True) -> Token:
+    """Return the token to use, preferring the long-lived one.
+
+    `allow_long_lived=False` skips it, for when the endpoint has already
+    refused it over scopes.
+    """
+    if allow_long_lived:
+        found = long_lived_token()
+        if found is not None:
+            return found
+    return session_token()
 
 
 def read_access_token() -> str:
@@ -198,9 +232,14 @@ def expired_seconds_ago() -> float | None:
     means the CLI simply has not run in a while. Checking first avoids spending
     a request — and rate-limit budget — on a call that is certain to 401.
     """
-    if long_lived_token() is not None:
-        # A setup-token carries no local expiry, and is good for about a year.
-        # Nothing to pre-check; a rejection surfaces as a 401 instead.
+    try:
+        if long_lived_token() is not None:
+            # A setup-token carries no local expiry, and is good for about a
+            # year. Nothing to pre-check; a rejection surfaces as a 401 instead.
+            return None
+    except CredentialError:
+        # Malformed token: read_token() reports it, so do not also claim the
+        # session token expired.
         return None
     expiry = token_expiry_ms()
     if expiry is None:

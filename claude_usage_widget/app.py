@@ -29,15 +29,21 @@ NOTIFY_CLEAR_MARGIN = 2
 class Poller(QObject):
     """Runs the blocking fetch off the UI thread; signals are auto-queued back."""
 
+
     succeeded = Signal(object)
     # (message, kind) where kind is one of auth / throttle / network / fatal.
     failed = Signal(str, str)
+    # The long-lived token was refused over scopes; the session token is in use.
+    scope_rejected = Signal()
 
     def __init__(self, config: Config) -> None:
         super().__init__()
         self._config = config
         self._busy = False
         self._lock = threading.Lock()
+        # Set once the endpoint refuses the long-lived token over scopes, so we
+        # stop spending a request on it every poll.
+        self._long_lived_refused = False
 
     def start_fetch(self) -> bool:
         with self._lock:
@@ -50,8 +56,8 @@ class Poller(QObject):
     def _run(self) -> None:
         token = None
         try:
-            token = read_token()
-            stale_for = expired_seconds_ago()
+            token = read_token(allow_long_lived=not self._long_lived_refused)
+            stale_for = expired_seconds_ago() if not token.is_long_lived else None
             if stale_for is not None:
                 hours = stale_for / 3600
                 ago = f"{hours:.0f} hr" if hours >= 1 else f"{stale_for / 60:.0f} min"
@@ -70,6 +76,16 @@ class Poller(QObject):
         except UsageError as exc:
             if exc.status in (401, 403):
                 kind = "auth"
+                scope_problem = "scope" in (exc.body or "").lower()
+                if token is not None and token.is_long_lived and scope_problem:
+                    # `claude setup-token` issues a token without user:profile,
+                    # which this endpoint requires. The token is valid, just not
+                    # for this call — fall back to the session token instead of
+                    # reporting a sign-in problem the user cannot fix.
+                    self._long_lived_refused = True
+                    self.scope_rejected.emit()
+                    self._run_with_session_token()
+                    return
                 if token is not None and token.is_long_lived:
                     self.failed.emit(
                         f"{ENV_TOKEN_VAR} was rejected. Regenerate it with "
@@ -91,6 +107,24 @@ class Poller(QObject):
         finally:
             with self._lock:
                 self._busy = False
+
+    def _run_with_session_token(self) -> None:
+        """Retry immediately using the credentials file token."""
+        try:
+            from .credentials import session_token
+
+            snapshot = load_snapshot(
+                session_token().value, self._config.get("user_agent")
+            )
+        except CredentialError as exc:
+            self.failed.emit(str(exc), "auth")
+        except UsageError as exc:
+            kind = "auth" if exc.status in (401, 403) else "network"
+            self.failed.emit(str(exc), kind)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(f"Unexpected error: {exc}", "network")
+        else:
+            self.succeeded.emit(snapshot)
 
 
 class WidgetApp(QObject):
@@ -119,6 +153,7 @@ class WidgetApp(QObject):
         self.poller = Poller(self.config)
         self.poller.succeeded.connect(self._on_success)
         self.poller.failed.connect(self._on_failure)
+        self.poller.scope_rejected.connect(self._on_scope_rejected)
 
         self.base_interval = max(60, int(self.config.get("poll_seconds")))
         self.current_interval = self.base_interval
@@ -192,6 +227,16 @@ class WidgetApp(QObject):
         suffix = "" if kind == "fatal" else f" Retrying in {minutes} min."
         self.widget.set_error(f"{message}{suffix}")
         self.tray.setToolTip(f"{DISPLAY_NAME} — {message}")
+
+    def _on_scope_rejected(self) -> None:
+        """The long-lived token lacks a scope, so the session token is in use."""
+        self.tray.showMessage(
+            DISPLAY_NAME,
+            f"{ENV_TOKEN_VAR} lacks the user:profile scope this endpoint needs. "
+            "Using the Claude Code session token instead.",
+            QSystemTrayIcon.Information,
+            10_000,
+        )
 
     def _retick(self) -> None:
         """Recompute reset countdowns without re-fetching."""

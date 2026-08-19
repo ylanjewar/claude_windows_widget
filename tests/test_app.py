@@ -193,6 +193,61 @@ class WidgetAppTests(unittest.TestCase):
         self.assertIsNotNone(self.app.widget.state.snapshot)
         self.assertTrue(self.app.widget.state.status)
 
+    # -- scope fallback -------------------------------------------------------
+
+    def test_scope_rejection_falls_back_to_the_session_token(self):
+        """`claude setup-token` omits user:profile, which this endpoint needs.
+
+        The long-lived token is valid, just not for this call, so the widget
+        must retry with the session token rather than report a sign-in problem
+        the user cannot fix.
+        """
+        from claude_usage_widget import app as app_module
+        from claude_usage_widget.credentials import SOURCE_ENVIRONMENT, Token
+        from claude_usage_widget.usage_api import UsageError
+
+        poller = app_module.Poller(self.app.config)
+        long_lived = Token("sk-ant-oat01-" + "x" * 95, SOURCE_ENVIRONMENT)
+        attempts: list[str] = []
+
+        def fake_load(token_value, ua=None):
+            attempts.append(token_value)
+            if token_value == long_lived.value:
+                raise UsageError(
+                    "Token lacks a scope this endpoint requires.",
+                    retryable=False,
+                    status=403,
+                    body='{"error":{"message":"does not meet scope requirement '
+                    "user:profile\"}}",
+                )
+            return self._snapshot(5)
+
+        original_load = app_module.load_snapshot
+        original_read = app_module.read_token
+        app_module.load_snapshot = fake_load
+        app_module.read_token = lambda allow_long_lived=True: (
+            long_lived if allow_long_lived else Token("sk-session", "credentials file")
+        )
+        try:
+            import claude_usage_widget.credentials as creds
+
+            original_session = creds.session_token
+            creds.session_token = lambda: Token("sk-session", "credentials file")
+            try:
+                results = []
+                poller.succeeded.connect(lambda snap: results.append(snap))
+                poller._run()
+            finally:
+                creds.session_token = original_session
+        finally:
+            app_module.load_snapshot = original_load
+            app_module.read_token = original_read
+
+        self.assertEqual(len(attempts), 2, "should retry with the session token")
+        self.assertEqual(attempts[1], "sk-session")
+        self.assertTrue(poller._long_lived_refused, "should not retry it every poll")
+        self.assertEqual(len(results), 1, "the retry's snapshot should be delivered")
+
     # -- packaging ------------------------------------------------------------
 
     def test_entry_point_runs_without_a_parent_package(self):
