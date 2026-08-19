@@ -80,6 +80,18 @@ registers `pythonw.exe -m claude_usage_widget`, which launches with no console
 window and nothing packed. If you do want an executable, `-OneDir` is flagged
 far less often than the default onefile build.
 
+## Which build am I running?
+
+Right-click the panel; the last menu entry reads e.g. `Version 1.1.0 (packaged,
+a1b2c3d)`. `python -m claude_usage_widget.probe` prints the same line.
+
+This matters because **a packaged executable is frozen at the commit it was
+built from**. Pulling new source does not change `dist\ClaudeUsageWidget.exe` —
+you have to rebuild. If the widget behaves like an older version than the source
+you have, compare that commit against `git rev-parse --short HEAD`.
+
+Running from source has no such gap: `git pull` and restart is enough.
+
 ## Using it
 
 | Action | How |

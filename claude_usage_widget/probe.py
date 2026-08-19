@@ -15,6 +15,7 @@ import json
 import sys
 from datetime import datetime, timezone
 
+from . import build_info
 from .credentials import (
     ENV_TOKEN_VAR,
     CredentialError,
@@ -62,6 +63,7 @@ def describe_expiry() -> str:
 
 
 def main() -> int:
+    print(f"=== widget ===\nversion:   {build_info()}\n")
     print("=== credentials ===")
     path = credentials_path()
     print(f"path:      {path}")

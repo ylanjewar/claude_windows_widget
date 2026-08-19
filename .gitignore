@@ -7,3 +7,4 @@ dist/
 *.spec
 app.ico
 .pytest_cache/
+claude_usage_widget/_build_info.py

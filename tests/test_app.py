@@ -209,6 +209,29 @@ class WidgetAppTests(unittest.TestCase):
         namespace = runpy.run_path(str(root / "main.py"), run_name="frozen_entry")
         self.assertTrue(callable(namespace.get("main")))
 
+    def test_menu_reports_the_build(self):
+        """A packaged build is frozen at its commit; pulling source won't change it.
+
+        Showing the build in the menu turns "am I running a stale exe?" into
+        something visible rather than something to infer from error wording.
+        """
+        from PySide6.QtWidgets import QMenu
+
+        from claude_usage_widget import __version__
+
+        menu = QMenu()
+        self.app._populate_menu(menu)
+        labels = [action.text() for action in menu.actions()]
+        self.assertTrue(
+            any(__version__ in label for label in labels),
+            f"no version entry in {labels}",
+        )
+
+    def test_build_info_distinguishes_source_from_packaged(self):
+        from claude_usage_widget import build_info
+
+        self.assertIn("source", build_info())
+
     # -- icon -----------------------------------------------------------------
 
     def test_write_ico_produces_a_valid_icon_file(self):

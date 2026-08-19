@@ -10,6 +10,7 @@ from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import startup
+from . import build_info
 from .config import DISPLAY_NAME, Config
 from .credentials import (
     ENV_TOKEN_VAR,
@@ -312,6 +313,11 @@ class WidgetApp(QObject):
         quit_action = QAction("Quit", menu)
         quit_action.triggered.connect(self.qt.quit)
         menu.addAction(quit_action)
+
+        menu.addSeparator()
+        version = QAction(f"Version {build_info()}", menu)
+        version.setEnabled(False)
+        menu.addAction(version)
         return menu
 
     def _show_menu(self, position: QPoint) -> None:
