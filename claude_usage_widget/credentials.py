@@ -67,13 +67,39 @@ def credentials_path() -> Path:
     return claude_config_dir() / ".credentials.json"
 
 
+# The file also holds OAuth state for MCP plugin servers under this key —
+# dozens of entries whose accessToken is "" and expiresAt is 0. A naive search
+# that trips over one of those placeholders reports the real token missing or
+# the sign-in expired since 1970, depending on which key it hits first.
+IGNORED_SUBTREES = frozenset({"mcpOAuth"})
+
+PRIMARY_SECTION = "claudeAiOauth"
+
+
+def _meaningful(value: object) -> bool:
+    """Placeholder values ("" and 0) must not terminate the search."""
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, (int, float)):
+        return value != 0
+    return value is not None
+
+
 def _find_key(node: object, target: str) -> object | None:
-    """Depth-first search for a key, so a reshuffled file still works."""
+    """Depth-first search for a *meaningful* value under `target`.
+
+    Skips the mcpOAuth subtree and empty placeholders, and is order-independent:
+    Claude Code rewrites the credentials file and the key order is not stable.
+    """
     if isinstance(node, dict):
         for key, value in node.items():
-            if key == target:
+            if key == target and _meaningful(value):
                 return value
-        for value in node.values():
+        for key, value in node.items():
+            if key in IGNORED_SUBTREES:
+                continue
             found = _find_key(value, target)
             if found is not None:
                 return found
@@ -82,6 +108,18 @@ def _find_key(node: object, target: str) -> object | None:
             found = _find_key(item, target)
             if found is not None:
                 return found
+    return None
+
+
+def _primary_lookup(data: object, *keys: str) -> object | None:
+    """Prefer the claudeAiOauth section outright before any tree search."""
+    if isinstance(data, dict):
+        section = data.get(PRIMARY_SECTION)
+        if isinstance(section, dict):
+            for key in keys:
+                value = section.get(key)
+                if _meaningful(value):
+                    return value
     return None
 
 
@@ -177,7 +215,11 @@ def _read_token_from_file() -> str:
     except ValueError as exc:
         raise CredentialError(f"{path.name} is not valid JSON: {exc}") from exc
 
-    token = _find_key(data, "accessToken") or _find_key(data, "access_token")
+    token = (
+        _primary_lookup(data, "accessToken", "access_token")
+        or _find_key(data, "accessToken")
+        or _find_key(data, "access_token")
+    )
     if not isinstance(token, str) or not token.strip():
         raise CredentialError(
             "No accessToken in the credentials file. Re-run /login in Claude Code."
@@ -191,12 +233,16 @@ def token_expiry_ms() -> int | None:
         data = json.loads(credentials_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    for key in ("expiresAt", "expires_at"):
-        value = _find_key(data, key)
-        if isinstance(value, (int, float)):
-            number = int(value)
-            # Some writers use seconds rather than milliseconds.
-            return number if number > 10**12 else number * 1000
+    value = _primary_lookup(data, "expiresAt", "expires_at")
+    if value is None:
+        for key in ("expiresAt", "expires_at"):
+            value = _find_key(data, key)
+            if value is not None:
+                break
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        number = int(value)
+        # Some writers use seconds rather than milliseconds.
+        return number if number > 10**12 else number * 1000
     return None
 
 

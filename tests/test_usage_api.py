@@ -510,6 +510,90 @@ class TokenExtractionTests(unittest.TestCase):
         self.assertIsNone(extract("hello world"))
 
 
+class CredentialsFileOrderTests(unittest.TestCase):
+    """The credentials file also stores MCP plugin OAuth state: dozens of
+    entries with accessToken "" and expiresAt 0. Claude Code rewrites the file
+    and key order is not stable, so the lookup must not depend on which
+    section a depth-first walk reaches first. A live failure looked exactly
+    like this: the structure printout showed a 108-char token while read_token
+    reported none, because an mcpOAuth placeholder was found first."""
+
+    def setUp(self):
+        import tempfile
+
+        self.dir = tempfile.mkdtemp(prefix="claude-order-")
+        self._config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+        self._env_token = os.environ.get(credentials.ENV_TOKEN_VAR)
+        os.environ["CLAUDE_CONFIG_DIR"] = self.dir
+        os.environ.pop(credentials.ENV_TOKEN_VAR, None)
+
+    def tearDown(self):
+        for key, value in (
+            ("CLAUDE_CONFIG_DIR", self._config_dir),
+            (credentials.ENV_TOKEN_VAR, self._env_token),
+        ):
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    REAL_TOKEN = "sk-ant-oat01-" + "r" * 95
+    REAL_EXPIRY = int((time.time() + 4 * 3600) * 1000)
+
+    def _mcp_entries(self):
+        return {
+            f"plugin:productivity:tool{i}|{i:016x}": {
+                "accessToken": "",
+                "expiresAt": 0,
+                "serverName": f"plugin:productivity:tool{i}",
+            }
+            for i in range(25)
+        }
+
+    def _write(self, payload):
+        (Path(self.dir) / ".credentials.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+
+    def _claude_section(self):
+        return {
+            "accessToken": self.REAL_TOKEN,
+            "expiresAt": self.REAL_EXPIRY,
+            "rateLimitTier": "default_claude_max_20x",
+            "subscriptionType": "max",
+        }
+
+    def test_mcp_section_first_in_file(self):
+        """The order that broke in the wild: placeholders before the token."""
+        self._write({"mcpOAuth": self._mcp_entries(), "claudeAiOauth": self._claude_section()})
+        self.assertEqual(credentials.read_token().value, self.REAL_TOKEN)
+        self.assertEqual(credentials.token_expiry_ms(), self.REAL_EXPIRY)
+        self.assertIsNone(credentials.expired_seconds_ago())
+        self.assertEqual(credentials.plan_label(), "Max (20x)")
+
+    def test_claude_section_first_in_file(self):
+        self._write({"claudeAiOauth": self._claude_section(), "mcpOAuth": self._mcp_entries()})
+        self.assertEqual(credentials.read_token().value, self.REAL_TOKEN)
+        self.assertEqual(credentials.token_expiry_ms(), self.REAL_EXPIRY)
+
+    def test_placeholder_expiry_does_not_read_as_1970(self):
+        """expiresAt 0 in a plugin entry must not mean 'expired 56 years ago'."""
+        self._write({"mcpOAuth": self._mcp_entries(), "claudeAiOauth": self._claude_section()})
+        self.assertIsNone(credentials.expired_seconds_ago())
+
+    def test_renamed_primary_section_still_found_by_search(self):
+        """If claudeAiOauth is ever renamed, the search must skip placeholders
+        rather than stop at one."""
+        self._write({"mcpOAuth": self._mcp_entries(), "oauthV2": self._claude_section()})
+        self.assertEqual(credentials.read_token().value, self.REAL_TOKEN)
+        self.assertEqual(credentials.token_expiry_ms(), self.REAL_EXPIRY)
+
+    def test_genuinely_missing_token_still_errors(self):
+        self._write({"mcpOAuth": self._mcp_entries()})
+        with self.assertRaises(credentials.CredentialError):
+            credentials.read_token()
+
+
 class RegistryFallbackTests(unittest.TestCase):
     """setx persists to HKCU\\Environment but never updates running processes.
 
