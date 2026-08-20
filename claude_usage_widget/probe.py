@@ -90,10 +90,6 @@ def main() -> int:
         print(f"expiry:    not tracked locally; {ENV_TOKEN_VAR} lasts about a year")
     else:
         print(f"expiry:    {describe_expiry()}")
-        print(
-            f"tip:       set {ENV_TOKEN_VAR} from `claude setup-token` so the "
-            "widget stops expiring every few hours"
-        )
 
     print("\n=== request ===")
     detected = detect_cli_version()
