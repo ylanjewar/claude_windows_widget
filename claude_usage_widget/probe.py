@@ -63,7 +63,10 @@ def describe_expiry() -> str:
 
 
 def main() -> int:
-    print(f"=== widget ===\nversion:   {build_info()}\n")
+    from .log import log_path
+
+    print(f"=== widget ===\nversion:   {build_info()}")
+    print(f"log:       {log_path()}\n")
     print("=== credentials ===")
     path = credentials_path()
     print(f"path:      {path}")
@@ -124,6 +127,14 @@ def main() -> int:
     for row in snapshot.rows:
         detail = row.detail or format_reset(row.resets_at)
         print(f"  {row.label:<24} {row.percent:6.2f}%  {detail}")
+
+    print("\n=== recent widget log ===")
+    try:
+        lines = log_path().read_text(encoding="utf-8").splitlines()
+        for line in lines[-25:]:
+            print(f"  {line}")
+    except OSError:
+        print("  (no log yet — the widget writes it as it runs)")
     return 0
 
 

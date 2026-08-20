@@ -20,6 +20,7 @@ from .credentials import (
     read_token,
 )
 from .icon import make_icon
+from .log import get_logger, redact
 from .usage_api import UsageError, UsageSnapshot, load_snapshot
 
 MAX_BACKOFF_SECONDS = 1800
@@ -59,14 +60,26 @@ class Poller(QObject):
         return True
 
     def _run(self) -> None:
+        log = get_logger()
         token = None
         try:
             token = read_token(allow_long_lived=not self._long_lived_refused)
             stale_for = expired_seconds_ago() if not token.is_long_lived else None
+            log.info(
+                "poll: token source=%s value=%s expired_for=%s",
+                token.source,
+                redact(token.value),
+                f"{stale_for:.0f}s" if stale_for is not None else "no",
+            )
             if stale_for is not None and self._try_cli_refresh():
                 # Claude Code renewed it; re-read and carry on as normal.
                 token = read_token(allow_long_lived=not self._long_lived_refused)
                 stale_for = expired_seconds_ago()
+                log.info(
+                    "poll: after refresh, token=%s expired_for=%s",
+                    redact(token.value),
+                    f"{stale_for:.0f}s" if stale_for is not None else "no",
+                )
             if stale_for is not None:
                 hours = stale_for / 3600
                 ago = f"{hours:.0f} hr" if hours >= 1 else f"{stale_for / 60:.0f} min"
@@ -80,9 +93,17 @@ class Poller(QObject):
                 )
             snapshot = load_snapshot(token.value, self._config.get("user_agent"))
         except CredentialError as exc:
+            log.warning("poll: credential error: %s", exc)
             # Recoverable by signing in, so treat it like an auth failure.
             self.failed.emit(str(exc), "auth")
         except UsageError as exc:
+            log.warning(
+                "poll: usage error status=%s retryable=%s body=%s message=%s",
+                exc.status,
+                exc.retryable,
+                (exc.body or "")[:300],
+                exc,
+            )
             if exc.status in (401, 403):
                 kind = "auth"
                 scope_problem = "scope" in (exc.body or "").lower()
@@ -110,8 +131,10 @@ class Poller(QObject):
                 kind = "fatal"
             self.failed.emit(str(exc), kind)
         except Exception as exc:  # noqa: BLE001 - never let the poller die silently
+            log.exception("poll: unexpected error")
             self.failed.emit(f"Unexpected error: {exc}", "network")
         else:
+            log.info("poll: success, %d rows", len(snapshot.rows))
             self.succeeded.emit(snapshot)
         finally:
             with self._lock:
@@ -123,18 +146,27 @@ class Poller(QObject):
         The CLI owns the refresh token and handles its rotation, so delegating
         keeps the widget out of the credential-writing business entirely.
         """
+        log = get_logger()
         if not self._config.get("auto_refresh_sign_in", True):
+            log.info("refresh: disabled by config")
             return False
         now = time.monotonic()
         if self._refresh_attempted_at is not None and now - self._refresh_attempted_at < 600:
+            log.info(
+                "refresh: suppressed, last attempt %.0fs ago",
+                now - self._refresh_attempted_at,
+            )
             return False
         self._refresh_attempted_at = now
         try:
             from . import startup
 
-            return startup.refresh_sign_in()
+            renewed = startup.refresh_sign_in()
         except Exception:  # noqa: BLE001 - a failed refresh is not fatal
+            log.exception("refresh: raised")
             return False
+        log.info("refresh: %s", "token renewed" if renewed else "did NOT renew token")
+        return renewed
 
     def _run_with_session_token(self) -> None:
         """Retry immediately using the credentials file token.
@@ -144,6 +176,8 @@ class Poller(QObject):
         CLAUDE_CODE_OAUTH_TOKEN reached here with an expired session token and
         no way to recover.
         """
+        log = get_logger()
+        log.info("fallback: retrying with session token")
         try:
             from .credentials import session_token
 
@@ -155,11 +189,16 @@ class Poller(QObject):
         except CredentialError as exc:
             self.failed.emit(str(exc), "auth")
         except UsageError as exc:
+            log.warning(
+                "fallback: usage error status=%s body=%s", exc.status, (exc.body or "")[:300]
+            )
             kind = "auth" if exc.status in (401, 403) else "network"
             self.failed.emit(str(exc), kind)
         except Exception as exc:  # noqa: BLE001
+            log.exception("fallback: unexpected error")
             self.failed.emit(f"Unexpected error: {exc}", "network")
         else:
+            log.info("fallback: success, %d rows", len(snapshot.rows))
             self.succeeded.emit(snapshot)
 
 
@@ -397,6 +436,10 @@ class WidgetApp(QObject):
         quit_action.triggered.connect(self.qt.quit)
         menu.addAction(quit_action)
 
+        log_action = QAction("Open log", menu)
+        log_action.triggered.connect(self._open_log)
+        menu.addAction(log_action)
+
         menu.addSeparator()
         version = QAction(f"Version {build_info()}", menu)
         version.setEnabled(False)
@@ -417,6 +460,14 @@ class WidgetApp(QObject):
             self.tray.showMessage(
                 "Could not change autostart", error, QSystemTrayIcon.Warning, 8000
             )
+
+    def _open_log(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from .log import log_path
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path())))
 
     def _open_claude_cli(self) -> None:
         ok, error = startup.open_claude_cli()

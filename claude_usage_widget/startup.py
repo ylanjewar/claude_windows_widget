@@ -81,9 +81,12 @@ def refresh_sign_in(timeout: int = 120) -> bool:
     the exit code, since the command succeeds for reasons unrelated to auth.
     """
     from .credentials import token_expiry_ms
+    from .log import get_logger
 
+    log = get_logger()
     candidates = cli_candidates()
     if not candidates:
+        log.warning("refresh_sign_in: no Claude Code CLI found")
         return False
 
     before = token_expiry_ms()
@@ -91,8 +94,11 @@ def refresh_sign_in(timeout: int = 120) -> bool:
     executable = candidates[0]
     use_shell = os.name == "nt" and executable.lower().endswith((".cmd", ".bat", ".ps1"))
     command = f'"{executable}" update' if use_shell else [executable, "update"]
+    log.info(
+        "refresh_sign_in: running `%s update` (expiry before: %s)", executable, before
+    )
     try:
-        subprocess.run(
+        proc = subprocess.run(
             command,
             capture_output=True,
             text=True,
@@ -100,10 +106,17 @@ def refresh_sign_in(timeout: int = 120) -> bool:
             creationflags=flags,
             shell=use_shell,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("refresh_sign_in: failed to run the CLI: %s", exc)
         return False
 
+    tail = ((proc.stdout or "") + (proc.stderr or "")).strip()[-400:]
+    log.info(
+        "refresh_sign_in: exit=%s output tail: %s", proc.returncode, tail or "(none)"
+    )
+
     after = token_expiry_ms()
+    log.info("refresh_sign_in: expiry after: %s (before: %s)", after, before)
     if after is None:
         return False
     return before is None or after > before
