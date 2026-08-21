@@ -206,6 +206,7 @@ you change something from the menu. Editable by hand (restart to apply):
 | `notify_at` | `[70, 80]` | Toast thresholds |
 | `notifications_enabled` | `true` | Master switch for toasts |
 | `auto_refresh_sign_in` | `true` | Run `claude update` to renew an expired sign-in |
+| `heartbeat_margin_minutes` | `45` | Renew early when validity drops below this; 0 disables |
 | `opacity` | `0.96` | Window opacity |
 | `position` | `null` | Saved `[x, y]`; ignored if off-screen |
 | `user_agent` | `null` | Override; otherwise autodetected from the CLI |
@@ -262,12 +263,16 @@ Claude Code the widget eventually shows "Sign-in expired". Opening Claude Code
 refreshes it, and the widget's right-click menu offers **Open Claude Code to
 refresh sign-in** when that is the problem.
 
-**The widget handles this for you.** When the session token has expired it runs
-`claude update`, which starts the CLI far enough to renew the token and write it
-back, then retries — no user action, no interactive session, no usage spent. The
-CLI owns the refresh token and its rotation, so delegating keeps the widget out
-of the credential-writing business entirely. It attempts this at most once every
-ten minutes, and `auto_refresh_sign_in: false` in the config turns it off.
+**The widget handles this for you, in two layers.** A heartbeat watches the
+token's remaining validity and, once it drops under 45 minutes, runs
+`claude update` to have the CLI renew it early — so the expired state is never
+visible in the first place. If expiry still happens (machine asleep at the
+wrong moment, CLI unavailable), the same refresh runs reactively and the poll
+retries. No user action, no interactive session, no usage spent; the CLI owns
+the refresh token and its rotation, so the widget stays out of credential
+writing entirely. Attempts are limited to one per ten minutes.
+`heartbeat_margin_minutes: 0` disables the heartbeat and
+`auto_refresh_sign_in: false` disables CLI refresh altogether.
 
 This only works while the *refresh* token is valid, which is roughly three
 weeks. Past that, Claude Code needs a real `/login` and the widget says so.

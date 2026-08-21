@@ -23,6 +23,10 @@ DEFAULTS: dict[str, Any] = {
     # Run `claude update` to let the CLI renew an expired sign-in, rather than
     # asking the user to open Claude Code themselves.
     "auto_refresh_sign_in": True,
+    # Heartbeat: also refresh while the token is still valid but close to
+    # expiry, so the widget never visibly enters the expired state. Minutes of
+    # remaining validity below which to act; 0 disables the heartbeat.
+    "heartbeat_margin_minutes": 45,
     "opacity": 0.96,
     # Saved window position as [x, y]; None means "centre-right of the screen".
     "position": None,

@@ -370,6 +370,83 @@ class WidgetAppTests(unittest.TestCase):
         self.assertEqual(refreshed["n"], 1, "fallback must attempt a refresh")
         self.assertEqual(len(results), 1)
 
+    # -- heartbeat ------------------------------------------------------------
+
+    def _heartbeat_poller(self, remaining_seconds):
+        """A poller whose token expiry sits `remaining_seconds` from now."""
+        import time as _time
+
+        from claude_usage_widget import app as app_module
+        from claude_usage_widget.credentials import SOURCE_FILE, Token
+        import claude_usage_widget.credentials as creds
+
+        poller = app_module.Poller(self.app.config)
+        token = Token("sk-ant-oat01-" + "h" * 95, SOURCE_FILE)
+        expiry_ms = int((_time.time() + remaining_seconds) * 1000)
+        return poller, token, creds, expiry_ms
+
+    def test_heartbeat_refreshes_before_expiry(self):
+        """Inside the margin, refresh early so 'expired' is never shown."""
+        import claude_usage_widget.credentials as creds
+        from claude_usage_widget import startup
+
+        poller, token, creds_mod, expiry_ms = self._heartbeat_poller(20 * 60)
+        calls = {"n": 0}
+        original_expiry = creds_mod.token_expiry_ms
+        original_refresh = startup.refresh_sign_in
+        creds_mod.token_expiry_ms = lambda: expiry_ms
+        startup.refresh_sign_in = lambda timeout=120: calls.__setitem__("n", calls["n"] + 1) or True
+        try:
+            poller._heartbeat(token)
+        finally:
+            creds_mod.token_expiry_ms = original_expiry
+            startup.refresh_sign_in = original_refresh
+        self.assertEqual(calls["n"], 1)
+
+    def test_heartbeat_is_quiet_when_expiry_is_far(self):
+        import claude_usage_widget.credentials as creds
+        from claude_usage_widget import startup
+
+        poller, token, creds_mod, expiry_ms = self._heartbeat_poller(5 * 3600)
+        calls = {"n": 0}
+        original_expiry = creds_mod.token_expiry_ms
+        original_refresh = startup.refresh_sign_in
+        creds_mod.token_expiry_ms = lambda: expiry_ms
+        startup.refresh_sign_in = lambda timeout=120: calls.__setitem__("n", 1) or True
+        try:
+            poller._heartbeat(token)
+        finally:
+            creds_mod.token_expiry_ms = original_expiry
+            startup.refresh_sign_in = original_refresh
+        self.assertEqual(calls["n"], 0)
+
+    def test_heartbeat_disabled_by_zero_margin(self):
+        import claude_usage_widget.credentials as creds
+        from claude_usage_widget import startup
+
+        self.app.config.set("heartbeat_margin_minutes", 0)
+        poller, token, creds_mod, expiry_ms = self._heartbeat_poller(10 * 60)
+        calls = {"n": 0}
+        original_expiry = creds_mod.token_expiry_ms
+        original_refresh = startup.refresh_sign_in
+        creds_mod.token_expiry_ms = lambda: expiry_ms
+        startup.refresh_sign_in = lambda timeout=120: calls.__setitem__("n", 1) or True
+        try:
+            poller._heartbeat(token)
+        finally:
+            creds_mod.token_expiry_ms = original_expiry
+            startup.refresh_sign_in = original_refresh
+            self.app.config.set("heartbeat_margin_minutes", 45)
+        self.assertEqual(calls["n"], 0)
+
+    def test_heartbeat_skips_long_lived_tokens(self):
+        from claude_usage_widget.credentials import SOURCE_ENVIRONMENT, Token
+        from claude_usage_widget import app as app_module
+
+        poller = app_module.Poller(self.app.config)
+        # No mocks: a long-lived token must return before touching expiry at all.
+        poller._heartbeat(Token("sk-ant-oat01-" + "e" * 95, SOURCE_ENVIRONMENT))
+
     # -- packaging ------------------------------------------------------------
 
     def test_entry_point_runs_without_a_parent_package(self):

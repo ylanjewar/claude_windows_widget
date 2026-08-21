@@ -59,12 +59,43 @@ class Poller(QObject):
         threading.Thread(target=self._run, daemon=True, name="usage-fetch").start()
         return True
 
+    def _heartbeat(self, token) -> None:
+        """Refresh before expiry so the expired state is never user-visible.
+
+        Only the session token expires, and only the CLI may renew it. Firing
+        inside the margin keeps the widget a step ahead of the 8-hour window
+        for as long as the refresh token (roughly three weeks) allows.
+        """
+        if token.is_long_lived:
+            return
+        margin_min = self._config.get("heartbeat_margin_minutes", 45)
+        try:
+            margin = float(margin_min) * 60
+        except (TypeError, ValueError):
+            margin = 45 * 60
+        if margin <= 0:
+            return
+        from .credentials import token_expiry_ms
+
+        expiry = token_expiry_ms()
+        if expiry is None:
+            return
+        remaining = expiry / 1000 - time.time()
+        if 0 < remaining < margin:
+            get_logger().info(
+                "heartbeat: token valid for only %.0f min, refreshing early",
+                remaining / 60,
+            )
+            self._try_cli_refresh()
+
     def _run(self) -> None:
         log = get_logger()
         token = None
         try:
             token = read_token(allow_long_lived=not self._long_lived_refused)
             stale_for = expired_seconds_ago() if not token.is_long_lived else None
+            if stale_for is None:
+                self._heartbeat(token)
             log.info(
                 "poll: token source=%s value=%s expired_for=%s",
                 token.source,
